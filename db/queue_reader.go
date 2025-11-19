@@ -21,11 +21,11 @@ type QueueMessage struct {
 
 // QueueReader инкапсулирует работу с очередью Oracle AQ
 type QueueReader struct {
-	dbConn     *DBConnection
-	queueName  string
+	dbConn       *DBConnection
+	queueName    string
 	consumerName string
-	waitTimeout int // в секундах
-	mu         sync.Mutex
+	waitTimeout  int // в секундах
+	mu           sync.Mutex
 }
 
 // NewQueueReader создает новый экземпляр QueueReader
@@ -61,7 +61,7 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 
 	// PL/SQL блок для извлечения сообщения из очереди
 	// Используем DBMS_AQ.DEQUEUE с XMLType payload
-	// Очередь использует XMLType, поэтому извлекаем как CLOB/XMLType
+	// Очередь использует XMLType (SYS.XMLTYPE), поэтому извлекаем как CLOB
 	plsql := `
 		DECLARE
 			dequeue_options DBMS_AQ.dequeue_options_t;
@@ -98,7 +98,7 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 					:success := 0;
 				ELSE
 					:error_code := SQLCODE;
-					:error_msg := SQLERRM;
+					:error_msg := SUBSTR(SQLERRM, 1, 4000);
 					:success := 0;
 				END IF;
 		END;
@@ -109,6 +109,9 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 	var success sql.NullInt64
 	var errorCode sql.NullInt64
 	var errorMsg sql.NullString
+
+	log.Printf("Попытка извлечения сообщения из очереди %s (consumer: %s, timeout: %d сек)",
+		qr.queueName, qr.consumerName, qr.waitTimeout)
 
 	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, plsql,
 		sql.Named("consumer_name", qr.consumerName),
@@ -122,6 +125,7 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 	)
 
 	if err != nil {
+		log.Printf("Ошибка выполнения PL/SQL блока для DEQUEUE: %v", err)
 		return nil, fmt.Errorf("ошибка выполнения PL/SQL блока: %w", err)
 	}
 
@@ -129,6 +133,7 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 	if success.Valid && success.Int64 == 0 {
 		if errorCode.Valid && errorCode.Int64 == -25228 {
 			// Очередь пуста - это нормально
+			log.Printf("Очередь пуста (код ошибки 25228)")
 			return nil, nil
 		}
 		if errorCode.Valid && errorCode.Int64 != 0 {
@@ -136,13 +141,16 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 			if errorMsg.Valid {
 				errText = errorMsg.String
 			}
+			log.Printf("Ошибка Oracle при извлечении сообщения (код %d): %s", errorCode.Int64, errText)
 			return nil, fmt.Errorf("ошибка Oracle (код %d): %s", errorCode.Int64, errText)
 		}
+		log.Printf("Неизвестная ошибка при извлечении сообщения (success=0, но errorCode не установлен)")
 		return nil, errors.New("неизвестная ошибка при извлечении сообщения")
 	}
 
 	// Если payload пуст, возвращаем nil
 	if !payload.Valid || payload.String == "" {
+		log.Printf("Payload пуст или невалиден")
 		return nil, nil
 	}
 
@@ -161,7 +169,7 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 // Возвращает слайс сообщений
 func (qr *QueueReader) DequeueAll() ([]*QueueMessage, error) {
 	log.Println("Начало выборки всех сообщений из очереди")
-	
+
 	var messages []*QueueMessage
 	count := 0
 
@@ -190,10 +198,14 @@ func (qr *QueueReader) DequeueAll() ([]*QueueMessage, error) {
 // ParseXMLMessage парсит XML сообщение из очереди
 // Возвращает map с данными из XML
 // Структура XML: /root/head/date_active_from и /root/body (содержит внутренний XML)
+// Внутренний XML содержит элементы: sms_task_id, phone_number, message, sender_name, sending_schedule, smpp_id
 func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{}, error) {
 	if msg == nil || msg.XMLPayload == "" {
 		return nil, errors.New("сообщение пусто или не содержит XML")
 	}
+
+	// Логируем исходный XML для отладки
+	log.Printf("Парсинг XML сообщения (первые 500 символов): %s", truncateString(msg.XMLPayload, 500))
 
 	// Парсим корневой элемент root
 	type Root struct {
@@ -207,27 +219,36 @@ func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{
 	}
 
 	var root Root
-	if err := xml.Unmarshal([]byte(msg.XMLPayload), &root); err != nil {
-		return nil, fmt.Errorf("ошибка парсинга корневого XML: %w", err)
+	xmlBytes := []byte(msg.XMLPayload)
+	if err := xml.Unmarshal(xmlBytes, &root); err != nil {
+		return nil, fmt.Errorf("ошибка парсинга корневого XML: %w, XML: %s", err, truncateString(msg.XMLPayload, 500))
 	}
 
 	// Парсим внутренний XML из body (аналогично C# коду: xmlDocInner.LoadXml(xmlDoc.DocumentElement.SelectSingleNode("/root/body").InnerText))
 	// Внутренний XML содержит элементы: sms_task_id, phone_number, message, sender_name, sending_schedule, smpp_id
 	type SMSData struct {
-		XMLName        xml.Name `xml:",any"`
-		SmsTaskID      string   `xml:"sms_task_id"`
-		PhoneNumber    string   `xml:"phone_number"`
-		Message        string   `xml:"message"`
-		SenderName     string   `xml:"sender_name"`
-		SendingSchedule string  `xml:"sending_schedule"`
-		SmppID         string   `xml:"smpp_id"`
+		XMLName         xml.Name `xml:",any"`
+		SmsTaskID       string   `xml:"sms_task_id"`
+		PhoneNumber     string   `xml:"phone_number"`
+		Message         string   `xml:"message"`
+		SenderName      string   `xml:"sender_name"`
+		SendingSchedule string   `xml:"sending_schedule"`
+		SmppID          string   `xml:"smpp_id"`
 	}
 
 	var smsData SMSData
 	bodyXML := strings.TrimSpace(root.Body.InnerXML)
-	if bodyXML != "" {
+
+	// Если body пуст, возможно структура XML другая - пробуем парсить напрямую
+	if bodyXML == "" {
+		// Пробуем парсить весь XML как SMSData напрямую
+		if err := xml.Unmarshal(xmlBytes, &smsData); err != nil {
+			return nil, fmt.Errorf("ошибка парсинга XML (body пуст, пробуем прямой парсинг): %w, XML: %s", err, truncateString(msg.XMLPayload, 500))
+		}
+	} else {
+		// Парсим внутренний XML из body
 		if err := xml.Unmarshal([]byte(bodyXML), &smsData); err != nil {
-			return nil, fmt.Errorf("ошибка парсинга внутреннего XML из body: %w, body content: %s", err, truncateString(bodyXML, 200))
+			return nil, fmt.Errorf("ошибка парсинга внутреннего XML из body: %w, body content: %s", err, truncateString(bodyXML, 500))
 		}
 	}
 
@@ -270,4 +291,3 @@ func (qr *QueueReader) SetWaitTimeout(seconds int) {
 	defer qr.mu.Unlock()
 	qr.waitTimeout = seconds
 }
-
