@@ -101,6 +101,8 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	// Аналогично Python, где payload доступен напрямую из объекта сообщения
 
 	// Создаем временную таблицу для хранения результата (если её еще нет)
+	// Используем ON COMMIT DELETE ROWS - данные удаляются при коммите
+	// Но мы читаем данные ДО коммита, поэтому это нормально
 	createTableSQL := `
 		BEGIN
 			EXECUTE IMMEDIATE 'CREATE GLOBAL TEMPORARY TABLE temp_queue_result (
@@ -116,7 +118,10 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 				END IF;
 		END;
 	`
-	_, _ = qr.dbConn.db.ExecContext(qr.dbConn.ctx, createTableSQL)
+	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, createTableSQL)
+	if err != nil {
+		log.Printf("Предупреждение: не удалось создать временную таблицу (возможно, уже существует): %v", err)
+	}
 
 	consumerName := qr.consumerName
 	if consumerName == "" {
@@ -180,25 +185,39 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	}
 
 	// Используем подход с временной таблицей: делаем dequeue и сохраняем в таблицу, затем читаем
+	// ВАЖНО: не делаем COMMIT в PL/SQL, так как временная таблица с ON COMMIT DELETE ROWS
+	// удалит данные после коммита. Читаем данные до коммита.
+	// Используем позиционные параметры для совместимости с godror
 	plsql := `
 		DECLARE
 			v_dequeue_options DBMS_AQ.dequeue_options_t;
 			v_message_properties DBMS_AQ.message_properties_t;
 			v_msgid RAW(16);
 			v_payload XMLType;
+			v_success NUMBER := 0;
+			v_error_code NUMBER := 0;
+			v_error_msg VARCHAR2(4000);
+			v_consumer_name VARCHAR2(128);
 		BEGIN
 			-- Очищаем временную таблицу
 			DELETE FROM temp_queue_result;
 			
-			IF :consumer_name IS NOT NULL AND LENGTH(:consumer_name) > 0 THEN
-				v_dequeue_options.consumer_name := :consumer_name;
-			END IF;
+			-- Настраиваем опции dequeue
 			v_dequeue_options.dequeue_mode := DBMS_AQ.REMOVE;
-			v_dequeue_options.wait := :wait_timeout;
+			v_dequeue_options.wait := :1;
 			v_dequeue_options.navigation := DBMS_AQ.FIRST_MESSAGE;
 			
+			-- Устанавливаем consumer_name только если он не пустой
+			IF :2 IS NOT NULL THEN
+				v_consumer_name := :2;
+				IF LENGTH(TRIM(v_consumer_name)) > 0 THEN
+					v_dequeue_options.consumer_name := TRIM(v_consumer_name);
+				END IF;
+			END IF;
+			
+			-- Выполняем dequeue
 			DBMS_AQ.DEQUEUE(
-				queue_name => :queue_name,
+				queue_name => :3,
 				dequeue_options => v_dequeue_options,
 				message_properties => v_message_properties,
 				payload => v_payload,
@@ -206,35 +225,72 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 			);
 			
 			-- Сохраняем результат во временную таблицу
+			-- НЕ делаем COMMIT здесь - данные будут доступны до коммита транзакции
 			INSERT INTO temp_queue_result (msgid, payload)
 			VALUES (RAWTOHEX(v_msgid), v_payload.getClobVal());
 			
-			COMMIT;
+			-- Устанавливаем флаг успеха
+			v_success := 1;
+			:4 := v_success;
+			:5 := 0; -- error_code = 0 при успехе
+			:6 := NULL; -- error_msg = NULL при успехе
 		EXCEPTION
 			WHEN OTHERS THEN
+				v_error_code := SQLCODE;
+				v_error_msg := SUBSTR(SQLERRM, 1, 4000);
 				IF SQLCODE = -25228 THEN
-					-- Очередь пуста - это нормально
-					NULL;
+					-- Очередь пуста - это нормально, не поднимаем исключение
+					v_success := 0;
+					:4 := v_success;
+					:5 := v_error_code;
+					:6 := v_error_msg;
 				ELSE
+					-- Другая ошибка - поднимаем исключение
+					:4 := 0;
+					:5 := v_error_code;
+					:6 := v_error_msg;
 					RAISE;
 				END IF;
 		END;
 	`
 
+	// Подготавливаем параметр consumer_name
+	// Если consumer_name пустой, передаем nil (NULL в Oracle)
 	var consumerParam interface{}
 	if qr.consumerName == "" {
-		consumerParam = sql.NullString{Valid: false}
+		consumerParam = nil // NULL для Oracle
 	} else {
-		consumerParam = qr.consumerName
+		consumerParam = strings.TrimSpace(qr.consumerName)
 	}
 
-	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, plsql,
-		sql.Named("consumer_name", consumerParam),
-		sql.Named("wait_timeout", qr.waitTimeout),
-		sql.Named("queue_name", qr.queueName),
+	// Используем обычные типы для OUT параметров, так как godror не поддерживает sql.NullString для OUT
+	var successFlag int64
+	var errorCode int64
+	var errorMsg string
+
+	// Выполняем PL/SQL блок в транзакции, чтобы временная таблица сохранила данные
+	tx, err := qr.dbConn.db.BeginTx(qr.dbConn.ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка начала транзакции: %w", err)
+	}
+	defer tx.Rollback() // Откатываем, если что-то пойдет не так
+
+	// Используем позиционные параметры: :1=wait_timeout, :2=consumer_name, :3=queue_name
+	// :4=success_flag (OUT), :5=error_code (OUT), :6=error_msg (OUT)
+	_, err = tx.ExecContext(qr.dbConn.ctx, plsql,
+		qr.waitTimeout,              // :1
+		consumerParam,               // :2
+		qr.queueName,                // :3
+		sql.Out{Dest: &successFlag}, // :4
+		sql.Out{Dest: &errorCode},   // :5
+		sql.Out{Dest: &errorMsg},    // :6
 	)
 
 	if err != nil {
+		// Откатываем транзакцию при ошибке
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
 		// Проверяем, не пуста ли очередь
 		errStr := err.Error()
 		if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
@@ -243,13 +299,29 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 		}
 		log.Printf("Ошибка выполнения PL/SQL для dequeue: %v", err)
 		log.Printf("Детали ошибки: consumer='%s', queue='%s', timeout=%d", qr.consumerName, qr.queueName, qr.waitTimeout)
-		// Пробуем упрощенный подход
-		return qr.dequeueOneMessageSimple()
+		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
-	// Читаем данные из временной таблицы
+	// Проверяем флаг успеха
+	// Если successFlag остался 0 (значение по умолчанию), значит была ошибка
+	if successFlag == 0 {
+		// Откатываем транзакцию при ошибке
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
+		if errorCode == -25228 {
+			return nil, nil // Очередь пуста
+		}
+		errText := "неизвестная ошибка"
+		if errorMsg != "" {
+			errText = errorMsg
+		}
+		return nil, fmt.Errorf("ошибка Oracle (код %d): %s", errorCode, errText)
+	}
+
+	// Читаем данные из временной таблицы В ТОЙ ЖЕ ТРАНЗАКЦИИ (до коммита)
 	query := "SELECT msgid, payload FROM temp_queue_result WHERE ROWNUM = 1"
-	rows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, query)
+	rows, err := tx.QueryContext(qr.dbConn.ctx, query)
 	if err != nil {
 		log.Printf("Ошибка чтения из временной таблицы: %v", err)
 		return nil, fmt.Errorf("ошибка чтения из временной таблицы: %w", err)
@@ -258,22 +330,38 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 
 	if !rows.Next() {
 		// Временная таблица пуста - значит dequeue не вернул сообщение (очередь пуста)
-		log.Printf("Временная таблица пуста - очередь пуста или сообщение не было извлечено")
+		// Откатываем транзакцию, так как сообщения нет
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
 		return nil, nil
 	}
 
 	var msgid, payload sql.NullString
 	if err := rows.Scan(&msgid, &payload); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
 		return nil, fmt.Errorf("ошибка чтения данных: %w", err)
 	}
 
 	if !payload.Valid || payload.String == "" {
+		// Payload пуст - откатываем транзакцию
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
 		return nil, nil
 	}
 
 	msgidStr := ""
 	if msgid.Valid {
 		msgidStr = msgid.String
+	}
+
+	// Коммитим транзакцию только после успешного чтения данных
+	// Это подтверждает удаление сообщения из очереди (dequeue_mode = REMOVE)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("ошибка коммита транзакции: %w", err)
 	}
 
 	msg := &QueueMessage{
@@ -341,9 +429,9 @@ func (qr *QueueReader) dequeueOneMessageSimple() (*QueueMessage, error) {
 
 	var consumerParam interface{}
 	if qr.consumerName == "" {
-		consumerParam = sql.NullString{Valid: false}
+		consumerParam = nil // NULL для Oracle
 	} else {
-		consumerParam = qr.consumerName
+		consumerParam = strings.TrimSpace(qr.consumerName)
 	}
 
 	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, plsql,
@@ -476,13 +564,12 @@ func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{
 	// Парсим внутренний XML из body (аналогично C# коду: xmlDocInner.LoadXml(xmlDoc.DocumentElement.SelectSingleNode("/root/body").InnerText))
 	// Внутренний XML содержит элементы: sms_task_id, phone_number, message, sender_name, sending_schedule, smpp_id
 	type SMSData struct {
-		XMLName         xml.Name `xml:",any"`
-		SmsTaskID       string   `xml:"sms_task_id"`
-		PhoneNumber     string   `xml:"phone_number"`
-		Message         string   `xml:"message"`
-		SenderName      string   `xml:"sender_name"`
-		SendingSchedule string   `xml:"sending_schedule"`
-		SmppID          string   `xml:"smpp_id"`
+		SmsTaskID       string `xml:"sms_task_id"`
+		PhoneNumber     string `xml:"phone_number"`
+		Message         string `xml:"message"`
+		SenderName      string `xml:"sender_name"`
+		SendingSchedule string `xml:"sending_schedule"`
+		SmppID          string `xml:"smpp_id"`
 	}
 
 	var smsData SMSData
