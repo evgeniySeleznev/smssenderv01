@@ -9,12 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	_ "github.com/sijms/go-ora/v2"
+	_ "github.com/godror/godror"
 	"gopkg.in/ini.v1"
 )
 
@@ -49,7 +48,7 @@ func NewDBConnection() (*DBConnection, error) {
 	}, nil
 }
 
-// OpenConnection открывает подключение к Oracle через драйвер go-ora (pure Go).
+// OpenConnection открывает подключение к Oracle через драйвер godror (Oracle Instant Client).
 func (d *DBConnection) OpenConnection() error {
 	sec := d.cfg.Section("main")
 
@@ -60,53 +59,25 @@ func (d *DBConnection) OpenConnection() error {
 	}
 	dsn := sec.Key("dsn").String()
 
-	// Формируем строку подключения для go-ora.
-	// Если dsn начинается с '(' — это полная TNS DESCRIPTION; преобразуем в Easy Connect формат.
+	// Формируем строку подключения для godror
+	// Godror использует формат: user/password@connectString
 	var connString string
+
+	// Обрабатываем DSN - может быть TNS DESCRIPTION или Easy Connect
 	if len(dsn) > 0 && dsn[0] == '(' {
-		// Извлекаем хост, порт и SERVICE_NAME из TNS DESCRIPTION
-		host, port, serviceName := parseTNSDescription(dsn)
-		if host == "" || serviceName == "" {
-			return fmt.Errorf("не удалось извлечь хост или SERVICE_NAME из TNS DESCRIPTION")
-		}
-		if port == "" {
-			port = "1521"
-		}
-		// Формируем Easy Connect строку: host:port/service_name
-		easyConnect := fmt.Sprintf("%s:%s/%s", host, port, serviceName)
-		connString = fmt.Sprintf("oracle://%s:%s@%s",
-			url.QueryEscape(user),
-			url.QueryEscape(pass),
-			easyConnect,
-		)
+		// TNS DESCRIPTION - используем как есть
+		connString = fmt.Sprintf("%s/%s@%s", user, pass, dsn)
 	} else {
-		// Иначе предполагаем формат Easy Connect: host[:port]/service_name или alias.
-		// Если порт не указан, по умолчанию используем 1521.
-		easy := strings.TrimSpace(dsn)
-		if easy != "" {
-			if i := strings.IndexRune(easy, '/'); i > 0 {
-				hostPort := easy[:i]
-				rest := easy[i:] // включает '/'
-				if !strings.Contains(hostPort, ":") {
-					hostPort += ":1521"
-				}
-				easy = hostPort + rest
-			} else if !strings.Contains(easy, ":") {
-				easy += ":1521"
-			}
-		}
-		connString = fmt.Sprintf("oracle://%s:%s@%s",
-			url.QueryEscape(user),
-			url.QueryEscape(pass),
-			easy,
-		)
+		// Easy Connect формат или TNS alias
+		connString = fmt.Sprintf("%s/%s@%s", user, pass, dsn)
 	}
 
-	db, err := sql.Open("oracle", connString)
+	db, err := sql.Open("godror", connString)
 	if err != nil {
 		log.Printf("ошибка sql.Open: %v", err)
 		return fmt.Errorf("ошибка sql.Open: %w", err)
 	}
+
 	// Базовые настройки пула
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
@@ -119,7 +90,7 @@ func (d *DBConnection) OpenConnection() error {
 		return fmt.Errorf("ошибка ping: %w", err)
 	}
 	d.db = db
-	log.Println("Database connection opened.")
+	log.Println("Database connection opened (using Oracle Instant Client via godror).")
 	return nil
 }
 
@@ -305,7 +276,7 @@ func jsonSafe(v any) any {
 func parseTNSDescription(tns string) (host, port, serviceName string) {
 	// Простой парсинг TNS DESCRIPTION формата:
 	// (DESCRIPTION = (ADDRESS = (PROTOCOL = TCP)(HOST = ...)(PORT = ...))(CONNECT_DATA = (SERVER = DEDICATED)(SERVICE_NAME = ...)))
-	
+
 	// Извлекаем HOST
 	if i := strings.Index(tns, "HOST = "); i >= 0 {
 		start := i + len("HOST = ")
@@ -314,7 +285,7 @@ func parseTNSDescription(tns string) (host, port, serviceName string) {
 			host = strings.TrimSpace(tns[start : start+end])
 		}
 	}
-	
+
 	// Извлекаем PORT
 	if i := strings.Index(tns, "PORT = "); i >= 0 {
 		start := i + len("PORT = ")
@@ -323,7 +294,7 @@ func parseTNSDescription(tns string) (host, port, serviceName string) {
 			port = strings.TrimSpace(tns[start : start+end])
 		}
 	}
-	
+
 	// Извлекаем SERVICE_NAME
 	if i := strings.Index(tns, "SERVICE_NAME = "); i >= 0 {
 		start := i + len("SERVICE_NAME = ")
@@ -332,7 +303,7 @@ func parseTNSDescription(tns string) (host, port, serviceName string) {
 			serviceName = strings.TrimSpace(tns[start : start+end])
 		}
 	}
-	
+
 	return host, port, serviceName
 }
 

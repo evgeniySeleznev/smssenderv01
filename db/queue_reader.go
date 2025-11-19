@@ -125,6 +125,60 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	log.Printf("Попытка извлечения сообщения из очереди %s (consumer: %s, timeout: %d сек)",
 		qr.queueName, consumerName, qr.waitTimeout)
 
+	// Отладочный запрос: проверяем, есть ли сообщения в очереди
+	// Получаем имя таблицы очереди
+	queueTable := qr.getQueueTableName()
+	if queueTable != "" {
+		// Проверяем все сообщения в очереди
+		checkQueryAll := fmt.Sprintf(`
+			SELECT COUNT(*) as msg_count, 
+			       COUNT(DISTINCT consumer_name) as consumer_count,
+			       LISTAGG(DISTINCT consumer_name, ', ') WITHIN GROUP (ORDER BY consumer_name) as consumers
+			FROM %s 
+			WHERE state = 0
+		`, queueTable)
+
+		checkRows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, checkQueryAll)
+		if err == nil {
+			if checkRows.Next() {
+				var msgCount, consumerCount sql.NullInt64
+				var consumers sql.NullString
+				if err := checkRows.Scan(&msgCount, &consumerCount, &consumers); err == nil {
+					if msgCount.Valid {
+						log.Printf("Отладка: в таблице очереди найдено %d сообщений (state=0)", msgCount.Int64)
+						if consumerCount.Valid && consumerCount.Int64 > 0 {
+							log.Printf("Отладка: найдено %d различных consumers: %s", consumerCount.Int64, getStringValue(consumers))
+						}
+					}
+				}
+			}
+			checkRows.Close()
+		}
+
+		// Проверяем сообщения для конкретного consumer
+		if qr.consumerName != "" {
+			checkQuery := fmt.Sprintf(`
+				SELECT COUNT(*) as msg_count 
+				FROM %s 
+				WHERE state = 0 
+				AND consumer_name = :consumer_name
+			`, queueTable)
+
+			checkRows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, checkQuery,
+				sql.Named("consumer_name", qr.consumerName),
+			)
+			if err == nil {
+				if checkRows.Next() {
+					var msgCount sql.NullInt64
+					if err := checkRows.Scan(&msgCount); err == nil && msgCount.Valid {
+						log.Printf("Отладка: для consumer '%s' найдено %d сообщений", qr.consumerName, msgCount.Int64)
+					}
+				}
+				checkRows.Close()
+			}
+		}
+	}
+
 	// Используем подход с временной таблицей: делаем dequeue и сохраняем в таблицу, затем читаем
 	plsql := `
 		DECLARE
@@ -182,10 +236,14 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 
 	if err != nil {
 		// Проверяем, не пуста ли очередь
-		if strings.Contains(err.Error(), "25228") {
+		errStr := err.Error()
+		if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
+			log.Printf("Очередь пуста (код ошибки 25228)")
 			return nil, nil
 		}
-		log.Printf("Ошибка выполнения PL/SQL для dequeue: %v, используем упрощенный подход", err)
+		log.Printf("Ошибка выполнения PL/SQL для dequeue: %v", err)
+		log.Printf("Детали ошибки: consumer='%s', queue='%s', timeout=%d", qr.consumerName, qr.queueName, qr.waitTimeout)
+		// Пробуем упрощенный подход
 		return qr.dequeueOneMessageSimple()
 	}
 
@@ -193,12 +251,14 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	query := "SELECT msgid, payload FROM temp_queue_result WHERE ROWNUM = 1"
 	rows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, query)
 	if err != nil {
+		log.Printf("Ошибка чтения из временной таблицы: %v", err)
 		return nil, fmt.Errorf("ошибка чтения из временной таблицы: %w", err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		// Очередь пуста
+		// Временная таблица пуста - значит dequeue не вернул сообщение (очередь пуста)
+		log.Printf("Временная таблица пуста - очередь пуста или сообщение не было извлечено")
 		return nil, nil
 	}
 
@@ -329,6 +389,19 @@ func (qr *QueueReader) dequeueOneMessageSimple() (*QueueMessage, error) {
 	}, nil
 }
 
+// getQueueTableName извлекает имя таблицы очереди из имени очереди
+func (qr *QueueReader) getQueueTableName() string {
+	// Формат: SCHEMA.QUEUE_NAME -> обычно SCHEMA.QUEUE_NAME_TABLE
+	parts := strings.Split(qr.queueName, ".")
+	if len(parts) == 2 {
+		schema := parts[0]
+		queueName := parts[1]
+		// Обычно таблица имеет суффикс _TABLE
+		return fmt.Sprintf("%s.%s_TABLE", schema, queueName)
+	}
+	return ""
+}
+
 // DequeueOne извлекает одно сообщение из очереди (для обратной совместимости)
 func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 	messages, err := qr.DequeueMany(1)
@@ -449,6 +522,22 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// getStringValue безопасно преобразует значение в строку, обрабатывая nil
+func getStringValue(v interface{}) string {
+	if v == nil {
+		return "<NULL>"
+	}
+	switch val := v.(type) {
+	case sql.NullString:
+		if !val.Valid {
+			return "<NULL>"
+		}
+		return val.String
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // GetQueueName возвращает имя очереди
