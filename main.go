@@ -2,10 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"oracle-client/db"
-	"strings"
+	"time"
 )
 
 func main() {
@@ -23,92 +22,6 @@ func main() {
 
 	log.Println("Успешно подключено к Oracle базе данных")
 
-	// Проверка соединения простым запросом
-	query := "SELECT sysdate FROM dual"
-	results, err := dbConn.ExecuteQuery(query)
-	if err != nil {
-		log.Printf("Ошибка выполнения запроса: %v", err)
-		return
-	}
-
-	log.Printf("Результаты запроса (%d строк):", len(results))
-	for i, row := range results {
-		log.Printf("Строка %d: %+v", i+1, row)
-	}
-
-	log.Println("\n" + strings.Repeat("=", 60))
-	log.Println("Проверка доступных очередей Oracle AQ для текущего пользователя")
-
-	// SQL запрос для получения всех доступных очередей для текущего пользователя
-	// ALL_QUEUES показывает все очереди, к которым у пользователя есть доступ
-	queuesQuery := `
-		SELECT 
-			OWNER,
-			NAME AS QUEUE_NAME,
-			QUEUE_TABLE,
-			QUEUE_TYPE,
-			ENQUEUE_ENABLED,
-			DEQUEUE_ENABLED,
-			RETENTION
-		FROM ALL_QUEUES
-		ORDER BY OWNER, NAME
-	`
-
-	queuesResults, err := dbConn.ExecuteQuery(queuesQuery)
-	if err != nil {
-		log.Printf("Ошибка выполнения запроса на получение очередей: %v", err)
-	} else {
-		log.Printf("\nНайдено доступных очередей: %d\n", len(queuesResults))
-		if len(queuesResults) > 0 {
-			log.Println(strings.Repeat("-", 100))
-			log.Printf("%-20s %-30s %-15s %-10s %-10s %-10s\n",
-				"ВЛАДЕЛЕЦ", "ИМЯ ОЧЕРЕДИ", "ТИП", "ENQUEUE", "DEQUEUE", "RETENTION")
-			log.Println(strings.Repeat("-", 100))
-			for _, queue := range queuesResults {
-				owner := getStringValue(queue["OWNER"])
-				queueName := getStringValue(queue["QUEUE_NAME"])
-				queueType := getStringValue(queue["QUEUE_TYPE"])
-				enqueueEnabled := getStringValue(queue["ENQUEUE_ENABLED"])
-				dequeueEnabled := getStringValue(queue["DEQUEUE_ENABLED"])
-				retention := getStringValue(queue["RETENTION"])
-
-				log.Printf("%-20s %-30s %-15s %-10s %-10s %-10s",
-					owner, queueName, queueType, enqueueEnabled, dequeueEnabled, retention)
-			}
-			log.Println(strings.Repeat("-", 100))
-
-			// Дополнительная информация о подписчиках (consumers) для очереди ASKAQ.AQ_ASK
-			// Запрос для поиска consumers через таблицу очереди
-			subscribersQuery := `
-				SELECT DISTINCT
-					consumer_name AS CONSUMER_NAME
-				FROM ASKAQ.AQ_ASK_TABLE
-				WHERE consumer_name IS NOT NULL
-				ORDER BY consumer_name
-			`
-
-			subscribersResults, err := dbConn.ExecuteQuery(subscribersQuery)
-			if err != nil {
-				log.Printf("Ошибка получения информации о подписчиках: %v", err)
-			} else if len(subscribersResults) > 0 {
-				log.Printf("\nНайдено consumers для очереди ASKAQ.AQ_ASK: %d\n", len(subscribersResults))
-				log.Println(strings.Repeat("-", 100))
-				log.Printf("%-50s\n", "CONSUMER_NAME")
-				log.Println(strings.Repeat("-", 100))
-				for _, sub := range subscribersResults {
-					consumerName := getStringValue(sub["CONSUMER_NAME"])
-					log.Printf("%-50s", consumerName)
-				}
-				log.Println(strings.Repeat("-", 100))
-			}
-		} else {
-			log.Println("Доступных очередей не найдено")
-		}
-	}
-
-	log.Println("\n" + strings.Repeat("=", 60))
-	log.Println("Работа с очередью Oracle AQ")
-
 	// Создаем QueueReader
 	queueReader, err := db.NewQueueReader(dbConn)
 	if err != nil {
@@ -117,21 +30,34 @@ func main() {
 
 	log.Printf("Очередь: %s", queueReader.GetQueueName())
 	log.Printf("Consumer: %s", queueReader.GetConsumerName())
+	log.Println("Начало работы с очередью Oracle AQ...")
 
-	// Вычитываем все сообщения из очереди
-	log.Println("\nНачало выборки сообщений из очереди...")
-	messages, err := queueReader.DequeueAll()
-	if err != nil {
-		log.Printf("Ошибка при выборке сообщений: %v", err)
-		return
-	}
+	// Устанавливаем таймаут ожидания сообщений (аналогично Python: queue.deqoptions.wait = 10)
+	queueReader.SetWaitTimeout(10)
 
-	if len(messages) == 0 {
-		log.Println("Очередь пуста, сообщений не найдено")
-	} else {
+	// Бесконечный цикл чтения из очереди (аналогично Python: while True)
+	for {
+		// Получаем сообщения из очереди (аналогично Python: messages = queue.deqmany(settings.query_number))
+		// Используем DequeueMany с количеством сообщений (аналогично settings.query_number = 50)
+		messages, err := queueReader.DequeueMany(50)
+		if err != nil {
+			log.Printf("Ошибка при выборке сообщений: %v", err)
+			// При ошибке ждем перед следующей попыткой
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		if len(messages) == 0 {
+			// Очередь пуста - ждем 10 секунд перед следующей попыткой
+			// Аналогично Python: logging.info(f"Очередь {self.connType} пуста в течение {settings.query_wait_time} секунд, перезапускаю слушатель")
+			log.Println("Очередь пуста, ожидание 10 секунд перед следующей попыткой...")
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		// Обрабатываем полученные сообщения
 		log.Printf("Получено сообщений: %d", len(messages))
 
-		// Обрабатываем каждое сообщение
 		for i, msg := range messages {
 			log.Printf("\n--- Сообщение %d ---", i+1)
 			log.Printf("MessageID: %s", msg.MessageID)
@@ -150,10 +76,11 @@ func main() {
 				log.Printf("Распарсенные данные:\n%s", string(jsonData))
 			}
 		}
-	}
 
-	log.Println("\n" + strings.Repeat("=", 60))
-	log.Println("Работа с очередью завершена")
+		// Небольшая задержка между циклами (аналогично Python: time.sleep(settings.main_circle_pause))
+		// где main_circle_pause = 0.5 секунд
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // truncateString обрезает строку до указанной длины
@@ -162,12 +89,4 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// getStringValue безопасно преобразует значение в строку, обрабатывая nil
-func getStringValue(v interface{}) string {
-	if v == nil {
-		return "<NULL>"
-	}
-	return fmt.Sprintf("%v", v)
 }

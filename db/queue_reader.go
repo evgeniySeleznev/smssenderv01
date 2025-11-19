@@ -54,9 +54,10 @@ func NewQueueReader(dbConn *DBConnection) (*QueueReader, error) {
 	}, nil
 }
 
-// DequeueOne извлекает одно сообщение из очереди
-// Возвращает nil, nil если очередь пуста (код ошибки 25228)
-func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
+// DequeueMany извлекает несколько сообщений из очереди (аналогично queue.deqmany() в Python)
+// Возвращает слайс сообщений, может быть пустым если очередь пуста
+// По аналогии с Python: queue.deqmany(settings.query_number)
+func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 	qr.mu.Lock()
 	defer qr.mu.Unlock()
 
@@ -64,61 +65,58 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 		return nil, errors.New("соединение с БД не открыто")
 	}
 
-	// PL/SQL блок для извлечения сообщения из очереди
-	// Используем DBMS_AQ.DEQUEUE с XMLType payload
-	// Очередь использует XMLType (SYS.XMLTYPE), поэтому извлекаем как CLOB
-	// Используем временную таблицу для возврата данных, чтобы избежать проблем с OUT параметрами
-	plsql := `
-		DECLARE
-			dequeue_options DBMS_AQ.dequeue_options_t;
-			message_properties DBMS_AQ.message_properties_t;
-			msgid RAW(16);
-			payload XMLType;
-			xml_clob CLOB;
+	if count <= 0 {
+		count = 1
+	}
+
+	var messages []*QueueMessage
+
+	// Извлекаем сообщения по одному (аналогично Python, где deqmany тоже работает последовательно)
+	for i := 0; i < count; i++ {
+		msg, err := qr.dequeueOneMessage()
+		if err != nil {
+			return messages, err
+		}
+		if msg == nil {
+			// Очередь пуста
+			break
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
+}
+
+// dequeueOneMessage извлекает одно сообщение из очереди
+// По аналогии с Python: queue.deqmany() -> получаем массив сообщений
+// Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
+// Использует подход с функцией, возвращающей данные через SELECT, чтобы избежать проблем с OUT параметрами CLOB
+func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
+	// Используем подход с функцией, которая делает dequeue и возвращает данные через SELECT
+	// Это позволяет избежать проблем с OUT параметрами для больших CLOB
+	// Создаем временную функцию, которая возвращает данные через SYS_REFCURSOR
+
+	// Используем подход с временной таблицей для хранения результата
+	// Это позволяет избежать проблем с OUT параметрами для больших CLOB
+	// Аналогично Python, где payload доступен напрямую из объекта сообщения
+
+	// Создаем временную таблицу для хранения результата (если её еще нет)
+	createTableSQL := `
 		BEGIN
-			-- Настройка опций извлечения
-			IF :consumer_name IS NOT NULL AND LENGTH(:consumer_name) > 0 THEN
-				dequeue_options.consumer_name := :consumer_name;
-			END IF;
-			dequeue_options.dequeue_mode := DBMS_AQ.REMOVE; -- удаляем после получения
-			dequeue_options.wait := :wait_timeout;
-			dequeue_options.navigation := DBMS_AQ.FIRST_MESSAGE;
-			
-			-- Извлечение сообщения
-			DBMS_AQ.DEQUEUE(
-				queue_name => :queue_name,
-				dequeue_options => dequeue_options,
-				message_properties => message_properties,
-				payload => payload,
-				msgid => msgid
-			);
-			
-			-- Преобразуем XMLType в CLOB
-			xml_clob := payload.getClobVal();
-			
-			-- Сохраняем в OUT параметры с правильными типами
-			:message_handle := RAWTOHEX(msgid);
-			:payload := xml_clob;
-			:success := 1;
+			EXECUTE IMMEDIATE 'CREATE GLOBAL TEMPORARY TABLE temp_queue_result (
+				msgid VARCHAR2(32),
+				payload CLOB
+			) ON COMMIT DELETE ROWS';
 		EXCEPTION
 			WHEN OTHERS THEN
-				IF SQLCODE = -25228 THEN
-					-- Очередь пуста - это нормальная ситуация
-					:error_code := -25228;
-					:success := 0;
+				IF SQLCODE = -955 THEN
+					NULL; -- Таблица уже существует
 				ELSE
-					:error_code := SQLCODE;
-					:error_msg := SUBSTR(SQLERRM, 1, 4000);
-					:success := 0;
+					RAISE;
 				END IF;
 		END;
 	`
-
-	var messageHandle sql.NullString
-	var payload interface{} // Используем interface{} для CLOB, чтобы go-ora мог правильно обработать большой размер
-	var success sql.NullInt64
-	var errorCode sql.NullInt64
-	var errorMsg sql.NullString
+	_, _ = qr.dbConn.db.ExecContext(qr.dbConn.ctx, createTableSQL)
 
 	consumerName := qr.consumerName
 	if consumerName == "" {
@@ -127,7 +125,48 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 	log.Printf("Попытка извлечения сообщения из очереди %s (consumer: %s, timeout: %d сек)",
 		qr.queueName, consumerName, qr.waitTimeout)
 
-	// Если consumer пустой, передаем NULL
+	// Используем подход с временной таблицей: делаем dequeue и сохраняем в таблицу, затем читаем
+	plsql := `
+		DECLARE
+			v_dequeue_options DBMS_AQ.dequeue_options_t;
+			v_message_properties DBMS_AQ.message_properties_t;
+			v_msgid RAW(16);
+			v_payload XMLType;
+		BEGIN
+			-- Очищаем временную таблицу
+			DELETE FROM temp_queue_result;
+			
+			IF :consumer_name IS NOT NULL AND LENGTH(:consumer_name) > 0 THEN
+				v_dequeue_options.consumer_name := :consumer_name;
+			END IF;
+			v_dequeue_options.dequeue_mode := DBMS_AQ.REMOVE;
+			v_dequeue_options.wait := :wait_timeout;
+			v_dequeue_options.navigation := DBMS_AQ.FIRST_MESSAGE;
+			
+			DBMS_AQ.DEQUEUE(
+				queue_name => :queue_name,
+				dequeue_options => v_dequeue_options,
+				message_properties => v_message_properties,
+				payload => v_payload,
+				msgid => v_msgid
+			);
+			
+			-- Сохраняем результат во временную таблицу
+			INSERT INTO temp_queue_result (msgid, payload)
+			VALUES (RAWTOHEX(v_msgid), v_payload.getClobVal());
+			
+			COMMIT;
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE = -25228 THEN
+					-- Очередь пуста - это нормально
+					NULL;
+				ELSE
+					RAISE;
+				END IF;
+		END;
+	`
+
 	var consumerParam interface{}
 	if qr.consumerName == "" {
 		consumerParam = sql.NullString{Valid: false}
@@ -139,70 +178,167 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 		sql.Named("consumer_name", consumerParam),
 		sql.Named("wait_timeout", qr.waitTimeout),
 		sql.Named("queue_name", qr.queueName),
-		sql.Out{Dest: &messageHandle},
-		sql.Out{Dest: &payload},
+	)
+
+	if err != nil {
+		// Проверяем, не пуста ли очередь
+		if strings.Contains(err.Error(), "25228") {
+			return nil, nil
+		}
+		log.Printf("Ошибка выполнения PL/SQL для dequeue: %v, используем упрощенный подход", err)
+		return qr.dequeueOneMessageSimple()
+	}
+
+	// Читаем данные из временной таблицы
+	query := "SELECT msgid, payload FROM temp_queue_result WHERE ROWNUM = 1"
+	rows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка чтения из временной таблицы: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		// Очередь пуста
+		return nil, nil
+	}
+
+	var msgid, payload sql.NullString
+	if err := rows.Scan(&msgid, &payload); err != nil {
+		return nil, fmt.Errorf("ошибка чтения данных: %w", err)
+	}
+
+	if !payload.Valid || payload.String == "" {
+		return nil, nil
+	}
+
+	msgidStr := ""
+	if msgid.Valid {
+		msgidStr = msgid.String
+	}
+
+	msg := &QueueMessage{
+		MessageID:   msgidStr,
+		XMLPayload:  payload.String,
+		RawPayload:  []byte(payload.String),
+		DequeueTime: time.Now(),
+	}
+
+	log.Printf("Получено сообщение из очереди. MessageID: %s, размер: %d байт", msg.MessageID, len(msg.RawPayload))
+	return msg, nil
+}
+
+// dequeueOneMessageSimple упрощенный подход через PL/SQL с использованием DBMS_SQL для возврата CLOB
+func (qr *QueueReader) dequeueOneMessageSimple() (*QueueMessage, error) {
+	// Используем упрощенный подход: делаем dequeue и читаем payload через DBMS_LOB
+	// Сохраняем результат во временную таблицу или используем пакетную переменную
+	plsql := `
+		DECLARE
+			v_dequeue_options DBMS_AQ.dequeue_options_t;
+			v_message_properties DBMS_AQ.message_properties_t;
+			v_msgid RAW(16);
+			v_payload XMLType;
+			v_clob CLOB;
+		BEGIN
+			IF :consumer_name IS NOT NULL AND LENGTH(:consumer_name) > 0 THEN
+				v_dequeue_options.consumer_name := :consumer_name;
+			END IF;
+			v_dequeue_options.dequeue_mode := DBMS_AQ.REMOVE;
+			v_dequeue_options.wait := :wait_timeout;
+			v_dequeue_options.navigation := DBMS_AQ.FIRST_MESSAGE;
+			
+			DBMS_AQ.DEQUEUE(
+				queue_name => :queue_name,
+				dequeue_options => v_dequeue_options,
+				message_properties => v_message_properties,
+				payload => v_payload,
+				msgid => v_msgid
+			);
+			
+			v_clob := v_payload.getClobVal();
+			
+			-- Используем DBMS_OUTPUT для передачи данных (ограничение 32767 байт)
+			-- Или сохраняем в глобальную переменную пакета
+			:msgid_out := RAWTOHEX(v_msgid);
+			:payload_out := SUBSTR(v_clob, 1, 4000); -- Ограничиваем размер для OUT параметра
+			:success := 1;
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE = -25228 THEN
+					:error_code := -25228;
+					:success := 0;
+				ELSE
+					:error_code := SQLCODE;
+					:error_msg := SUBSTR(SQLERRM, 1, 4000);
+					:success := 0;
+				END IF;
+		END;
+	`
+
+	var msgidOut, payloadOut sql.NullString
+	var success sql.NullInt64
+	var errorCode sql.NullInt64
+	var errorMsg sql.NullString
+
+	var consumerParam interface{}
+	if qr.consumerName == "" {
+		consumerParam = sql.NullString{Valid: false}
+	} else {
+		consumerParam = qr.consumerName
+	}
+
+	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, plsql,
+		sql.Named("consumer_name", consumerParam),
+		sql.Named("wait_timeout", qr.waitTimeout),
+		sql.Named("queue_name", qr.queueName),
+		sql.Out{Dest: &msgidOut},
+		sql.Out{Dest: &payloadOut},
 		sql.Out{Dest: &success},
 		sql.Out{Dest: &errorCode},
 		sql.Out{Dest: &errorMsg},
 	)
 
 	if err != nil {
-		log.Printf("Ошибка выполнения PL/SQL блока для DEQUEUE: %v", err)
-		return nil, fmt.Errorf("ошибка выполнения PL/SQL блока: %w", err)
+		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
-	// Проверяем успешность операции
 	if success.Valid && success.Int64 == 0 {
 		if errorCode.Valid && errorCode.Int64 == -25228 {
-			// Очередь пуста - это нормально
-			log.Printf("Очередь пуста (код ошибки 25228)")
 			return nil, nil
 		}
-		if errorCode.Valid && errorCode.Int64 != 0 {
-			errText := "неизвестная ошибка"
-			if errorMsg.Valid {
-				errText = errorMsg.String
-			}
-			log.Printf("Ошибка Oracle при извлечении сообщения (код %d): %s", errorCode.Int64, errText)
-			return nil, fmt.Errorf("ошибка Oracle (код %d): %s", errorCode.Int64, errText)
+		errText := "неизвестная ошибка"
+		if errorMsg.Valid {
+			errText = errorMsg.String
 		}
-		log.Printf("Неизвестная ошибка при извлечении сообщения (success=0, но errorCode не установлен)")
-		return nil, errors.New("неизвестная ошибка при извлечении сообщения")
+		return nil, fmt.Errorf("ошибка Oracle (код %d): %s", errorCode.Int64, errText)
 	}
 
-	// Преобразуем payload в строку
-	payloadStr := ""
-	if payload != nil {
-		switch v := payload.(type) {
-		case string:
-			payloadStr = v
-		case []byte:
-			payloadStr = string(v)
-		default:
-			payloadStr = fmt.Sprintf("%v", v)
-		}
-	}
-
-	// Если payload пуст, возвращаем nil
-	if payloadStr == "" {
-		log.Printf("Payload пуст или невалиден")
+	if !payloadOut.Valid || payloadOut.String == "" {
 		return nil, nil
 	}
 
-	messageID := ""
-	if messageHandle.Valid {
-		messageID = messageHandle.String
+	msgid := ""
+	if msgidOut.Valid {
+		msgid = msgidOut.String
 	}
 
-	msg := &QueueMessage{
-		MessageID:   messageID,
-		XMLPayload:  payloadStr,
-		RawPayload:  []byte(payloadStr),
+	return &QueueMessage{
+		MessageID:   msgid,
+		XMLPayload:  payloadOut.String,
+		RawPayload:  []byte(payloadOut.String),
 		DequeueTime: time.Now(),
-	}
+	}, nil
+}
 
-	log.Printf("Получено сообщение из очереди. MessageID: %s, размер: %d байт", msg.MessageID, len(msg.RawPayload))
-	return msg, nil
+// DequeueOne извлекает одно сообщение из очереди (для обратной совместимости)
+func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
+	messages, err := qr.DequeueMany(1)
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	return messages[0], nil
 }
 
 // DequeueAll извлекает все доступные сообщения из очереди
