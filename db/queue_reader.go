@@ -41,10 +41,15 @@ func NewQueueReader(dbConn *DBConnection) (*QueueReader, error) {
 		queueName = "ASKAQ.AQ_ASK" // значение по умолчанию
 	}
 
+	consumerName := queueSec.Key("consumer_name").String()
+	if consumerName == "" {
+		consumerName = "" // Пустой consumer - читаем без указания consumer
+	}
+
 	return &QueueReader{
 		dbConn:       dbConn,
 		queueName:    queueName,
-		consumerName: "SUB_SMS_SENDER",
+		consumerName: consumerName,
 		waitTimeout:  2, // 2 секунды по умолчанию
 	}, nil
 }
@@ -62,16 +67,19 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 	// PL/SQL блок для извлечения сообщения из очереди
 	// Используем DBMS_AQ.DEQUEUE с XMLType payload
 	// Очередь использует XMLType (SYS.XMLTYPE), поэтому извлекаем как CLOB
+	// Используем временную таблицу для возврата данных, чтобы избежать проблем с OUT параметрами
 	plsql := `
 		DECLARE
 			dequeue_options DBMS_AQ.dequeue_options_t;
 			message_properties DBMS_AQ.message_properties_t;
 			msgid RAW(16);
 			payload XMLType;
-			xml_str CLOB;
+			xml_clob CLOB;
 		BEGIN
 			-- Настройка опций извлечения
-			dequeue_options.consumer_name := :consumer_name;
+			IF :consumer_name IS NOT NULL AND LENGTH(:consumer_name) > 0 THEN
+				dequeue_options.consumer_name := :consumer_name;
+			END IF;
 			dequeue_options.dequeue_mode := DBMS_AQ.REMOVE; -- удаляем после получения
 			dequeue_options.wait := :wait_timeout;
 			dequeue_options.navigation := DBMS_AQ.FIRST_MESSAGE;
@@ -85,10 +93,12 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 				msgid => msgid
 			);
 			
-			-- Преобразуем XMLType в CLOB для возврата
-			xml_str := payload.getClobVal();
-			:message_handle := msgid;
-			:payload := xml_str;
+			-- Преобразуем XMLType в CLOB
+			xml_clob := payload.getClobVal();
+			
+			-- Сохраняем в OUT параметры с правильными типами
+			:message_handle := RAWTOHEX(msgid);
+			:payload := xml_clob;
 			:success := 1;
 		EXCEPTION
 			WHEN OTHERS THEN
@@ -104,17 +114,29 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 		END;
 	`
 
-	var messageHandle []byte
-	var payload sql.NullString
+	var messageHandle sql.NullString
+	var payload interface{} // Используем interface{} для CLOB, чтобы go-ora мог правильно обработать большой размер
 	var success sql.NullInt64
 	var errorCode sql.NullInt64
 	var errorMsg sql.NullString
 
+	consumerName := qr.consumerName
+	if consumerName == "" {
+		consumerName = "NULL"
+	}
 	log.Printf("Попытка извлечения сообщения из очереди %s (consumer: %s, timeout: %d сек)",
-		qr.queueName, qr.consumerName, qr.waitTimeout)
+		qr.queueName, consumerName, qr.waitTimeout)
+
+	// Если consumer пустой, передаем NULL
+	var consumerParam interface{}
+	if qr.consumerName == "" {
+		consumerParam = sql.NullString{Valid: false}
+	} else {
+		consumerParam = qr.consumerName
+	}
 
 	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, plsql,
-		sql.Named("consumer_name", qr.consumerName),
+		sql.Named("consumer_name", consumerParam),
 		sql.Named("wait_timeout", qr.waitTimeout),
 		sql.Named("queue_name", qr.queueName),
 		sql.Out{Dest: &messageHandle},
@@ -148,16 +170,34 @@ func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
 		return nil, errors.New("неизвестная ошибка при извлечении сообщения")
 	}
 
+	// Преобразуем payload в строку
+	payloadStr := ""
+	if payload != nil {
+		switch v := payload.(type) {
+		case string:
+			payloadStr = v
+		case []byte:
+			payloadStr = string(v)
+		default:
+			payloadStr = fmt.Sprintf("%v", v)
+		}
+	}
+
 	// Если payload пуст, возвращаем nil
-	if !payload.Valid || payload.String == "" {
+	if payloadStr == "" {
 		log.Printf("Payload пуст или невалиден")
 		return nil, nil
 	}
 
+	messageID := ""
+	if messageHandle.Valid {
+		messageID = messageHandle.String
+	}
+
 	msg := &QueueMessage{
-		MessageID:   fmt.Sprintf("%x", messageHandle),
-		XMLPayload:  payload.String,
-		RawPayload:  []byte(payload.String),
+		MessageID:   messageID,
+		XMLPayload:  payloadStr,
+		RawPayload:  []byte(payloadStr),
 		DequeueTime: time.Now(),
 	}
 

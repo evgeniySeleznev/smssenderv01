@@ -77,35 +77,27 @@ func main() {
 			}
 			log.Println(strings.Repeat("-", 100))
 
-			// Дополнительная информация о подписчиках (consumers)
+			// Дополнительная информация о подписчиках (consumers) для очереди ASKAQ.AQ_ASK
+			// Запрос для поиска consumers через таблицу очереди
 			subscribersQuery := `
-				SELECT 
-					QS.QUEUE_OWNER,
-					QS.QUEUE_NAME,
-					QS.CONSUMER_NAME,
-					QS.ADDRESS,
-					QS.PROTOCOL
-				FROM ALL_QUEUE_SUBSCRIBERS QS
-				ORDER BY QS.QUEUE_OWNER, QS.QUEUE_NAME, QS.CONSUMER_NAME
+				SELECT DISTINCT
+					consumer_name AS CONSUMER_NAME
+				FROM ASKAQ.AQ_ASK_TABLE
+				WHERE consumer_name IS NOT NULL
+				ORDER BY consumer_name
 			`
 
 			subscribersResults, err := dbConn.ExecuteQuery(subscribersQuery)
 			if err != nil {
 				log.Printf("Ошибка получения информации о подписчиках: %v", err)
 			} else if len(subscribersResults) > 0 {
-				log.Printf("\nНайдено подписчиков (consumers): %d\n", len(subscribersResults))
+				log.Printf("\nНайдено consumers для очереди ASKAQ.AQ_ASK: %d\n", len(subscribersResults))
 				log.Println(strings.Repeat("-", 100))
-				log.Printf("%-20s %-30s %-30s\n",
-					"ВЛАДЕЛЕЦ/ОЧЕРЕДЬ", "CONSUMER", "ADDRESS")
+				log.Printf("%-50s\n", "CONSUMER_NAME")
 				log.Println(strings.Repeat("-", 100))
 				for _, sub := range subscribersResults {
-					queueOwner := getStringValue(sub["QUEUE_OWNER"])
-					queueName := getStringValue(sub["QUEUE_NAME"])
 					consumerName := getStringValue(sub["CONSUMER_NAME"])
-					address := getStringValue(sub["ADDRESS"])
-
-					log.Printf("%-20s.%-30s %-30s %s",
-						queueOwner, queueName, consumerName, address)
+					log.Printf("%-50s", consumerName)
 				}
 				log.Println(strings.Repeat("-", 100))
 			}
