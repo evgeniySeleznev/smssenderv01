@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"oracle-client/db"
 	"strings"
@@ -33,6 +34,84 @@ func main() {
 	log.Printf("Результаты запроса (%d строк):", len(results))
 	for i, row := range results {
 		log.Printf("Строка %d: %+v", i+1, row)
+	}
+
+	log.Println("\n" + strings.Repeat("=", 60))
+	log.Println("Проверка доступных очередей Oracle AQ для текущего пользователя")
+
+	// SQL запрос для получения всех доступных очередей для текущего пользователя
+	// ALL_QUEUES показывает все очереди, к которым у пользователя есть доступ
+	queuesQuery := `
+		SELECT 
+			OWNER,
+			NAME AS QUEUE_NAME,
+			QUEUE_TABLE,
+			QUEUE_TYPE,
+			ENQUEUE_ENABLED,
+			DEQUEUE_ENABLED,
+			RETENTION
+		FROM ALL_QUEUES
+		ORDER BY OWNER, NAME
+	`
+
+	queuesResults, err := dbConn.ExecuteQuery(queuesQuery)
+	if err != nil {
+		log.Printf("Ошибка выполнения запроса на получение очередей: %v", err)
+	} else {
+		log.Printf("\nНайдено доступных очередей: %d\n", len(queuesResults))
+		if len(queuesResults) > 0 {
+			log.Println(strings.Repeat("-", 100))
+			log.Printf("%-20s %-30s %-15s %-10s %-10s %-10s\n",
+				"ВЛАДЕЛЕЦ", "ИМЯ ОЧЕРЕДИ", "ТИП", "ENQUEUE", "DEQUEUE", "RETENTION")
+			log.Println(strings.Repeat("-", 100))
+			for _, queue := range queuesResults {
+				owner := getStringValue(queue["OWNER"])
+				queueName := getStringValue(queue["QUEUE_NAME"])
+				queueType := getStringValue(queue["QUEUE_TYPE"])
+				enqueueEnabled := getStringValue(queue["ENQUEUE_ENABLED"])
+				dequeueEnabled := getStringValue(queue["DEQUEUE_ENABLED"])
+				retention := getStringValue(queue["RETENTION"])
+
+				log.Printf("%-20s %-30s %-15s %-10s %-10s %-10s",
+					owner, queueName, queueType, enqueueEnabled, dequeueEnabled, retention)
+			}
+			log.Println(strings.Repeat("-", 100))
+
+			// Дополнительная информация о подписчиках (consumers)
+			subscribersQuery := `
+				SELECT 
+					QS.QUEUE_OWNER,
+					QS.QUEUE_NAME,
+					QS.CONSUMER_NAME,
+					QS.ADDRESS,
+					QS.PROTOCOL
+				FROM ALL_QUEUE_SUBSCRIBERS QS
+				ORDER BY QS.QUEUE_OWNER, QS.QUEUE_NAME, QS.CONSUMER_NAME
+			`
+
+			subscribersResults, err := dbConn.ExecuteQuery(subscribersQuery)
+			if err != nil {
+				log.Printf("Ошибка получения информации о подписчиках: %v", err)
+			} else if len(subscribersResults) > 0 {
+				log.Printf("\nНайдено подписчиков (consumers): %d\n", len(subscribersResults))
+				log.Println(strings.Repeat("-", 100))
+				log.Printf("%-20s %-30s %-30s\n",
+					"ВЛАДЕЛЕЦ/ОЧЕРЕДЬ", "CONSUMER", "ADDRESS")
+				log.Println(strings.Repeat("-", 100))
+				for _, sub := range subscribersResults {
+					queueOwner := getStringValue(sub["QUEUE_OWNER"])
+					queueName := getStringValue(sub["QUEUE_NAME"])
+					consumerName := getStringValue(sub["CONSUMER_NAME"])
+					address := getStringValue(sub["ADDRESS"])
+
+					log.Printf("%-20s.%-30s %-30s %s",
+						queueOwner, queueName, consumerName, address)
+				}
+				log.Println(strings.Repeat("-", 100))
+			}
+		} else {
+			log.Println("Доступных очередей не найдено")
+		}
 	}
 
 	log.Println("\n" + strings.Repeat("=", 60))
@@ -91,4 +170,12 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// getStringValue безопасно преобразует значение в строку, обрабатывая nil
+func getStringValue(v interface{}) string {
+	if v == nil {
+		return "<NULL>"
+	}
+	return fmt.Sprintf("%v", v)
 }
