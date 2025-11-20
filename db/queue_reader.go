@@ -396,7 +396,6 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	}
 
 	log.Printf("Получено сообщение из очереди. MessageID: %s, размер: %d байт", msg.MessageID, len(msg.RawPayload))
-	log.Printf("XML string content: %s", truncateString(msg.XMLPayload, 500))
 	return msg, nil
 }
 
@@ -565,9 +564,6 @@ func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{
 	if msg == nil || msg.XMLPayload == "" {
 		return nil, errors.New("сообщение пусто или не содержит XML")
 	}
-
-	// Логируем исходный XML для отладки
-	log.Printf("Парсинг XML сообщения (первые 500 символов): %s", truncateString(msg.XMLPayload, 500))
 
 	// Парсим корневой элемент root
 	type Root struct {

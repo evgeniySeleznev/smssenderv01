@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"log"
 	"oracle-client/db"
+	"strings"
 	"time"
 )
 
@@ -62,14 +64,15 @@ func main() {
 			log.Printf("\n--- Сообщение %d ---", i+1)
 			log.Printf("MessageID: %s", msg.MessageID)
 			log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
-			log.Printf("XML Payload (первые 200 символов): %s",
-				truncateString(msg.XMLPayload, 200))
+
+			// Выводим XML в красивом формате
+			prettyXML := formatXML(msg.XMLPayload)
+			log.Printf("XML Payload:\n%s", prettyXML)
 
 			// Парсим XML сообщение
 			parsed, err := queueReader.ParseXMLMessage(msg)
 			if err != nil {
 				log.Printf("Ошибка парсинга XML: %v", err)
-				log.Printf("Полный XML: %s", msg.XMLPayload)
 			} else {
 				// Выводим распарсенные данные в JSON формате для читаемости
 				jsonData, _ := json.MarshalIndent(parsed, "", "  ")
@@ -83,10 +86,43 @@ func main() {
 	}
 }
 
-// truncateString обрезает строку до указанной длины
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// formatXML форматирует XML строку для красивого вывода
+func formatXML(xmlString string) string {
+	if xmlString == "" {
+		return ""
 	}
-	return s[:maxLen] + "..."
+
+	// Парсим XML для форматирования
+	var b strings.Builder
+	decoder := xml.NewDecoder(strings.NewReader(xmlString))
+	encoder := xml.NewEncoder(&b)
+	encoder.Indent("", "  ")
+
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			// Если ошибка парсинга (например, EOF), это нормально - просто выходим
+			break
+		}
+		if err := encoder.EncodeToken(token); err != nil {
+			// Если не удалось закодировать токен, возвращаем исходную строку
+			return xmlString
+		}
+	}
+
+	if err := encoder.Flush(); err != nil {
+		// Если не удалось завершить кодирование, возвращаем исходную строку
+		return xmlString
+	}
+
+	formatted := b.String()
+	// Убираем лишние переносы строк в начале и конце
+	formatted = strings.TrimSpace(formatted)
+
+	// Если форматирование не удалось (результат пустой), возвращаем исходную строку
+	if formatted == "" {
+		return xmlString
+	}
+
+	return formatted
 }
