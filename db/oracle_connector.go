@@ -56,16 +56,7 @@ func (d *DBConnection) OpenConnection() error {
 
 	// Формируем строку подключения для godror
 	// Godror использует формат: user/password@connectString
-	var connString string
-
-	// Обрабатываем DSN - может быть TNS DESCRIPTION или Easy Connect
-	if len(dsn) > 0 && dsn[0] == '(' {
-		// TNS DESCRIPTION - используем как есть
-		connString = fmt.Sprintf("%s/%s@%s", user, pass, dsn)
-	} else {
-		// Easy Connect формат или TNS alias
-		connString = fmt.Sprintf("%s/%s@%s", user, pass, dsn)
-	}
+	connString := fmt.Sprintf("%s/%s@%s", user, pass, dsn)
 
 	db, err := sql.Open("godror", connString)
 	if err != nil {
