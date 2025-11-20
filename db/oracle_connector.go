@@ -338,3 +338,8 @@ func (d *DBConnection) GetDB() *sql.DB {
 func (d *DBConnection) GetContext() context.Context {
 	return d.ctx
 }
+
+// GetConfig возвращает конфигурацию для доступа к настройкам.
+func (d *DBConnection) GetConfig() *ini.File {
+	return d.cfg
+}
