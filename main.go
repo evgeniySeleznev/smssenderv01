@@ -165,30 +165,34 @@ func main() {
 			log.Println("Все батчи обработаны")
 		}
 
-		// Обрабатываем exception queue, если включено
+		// Обрабатываем exception queue асинхронно, если включено (чтобы не блокировать основной цикл)
 		if processExceptionQueue && exceptionQueueReader != nil {
-			exceptionMessages, err := exceptionQueueReader.DequeueMany(100)
-			if err != nil {
-				log.Printf("Ошибка при выборке сообщений из exception queue: %v", err)
-			} else if len(exceptionMessages) > 0 {
-				log.Printf("Получено сообщений из exception queue: %d", len(exceptionMessages))
+			go func() {
+				exceptionMessages, err := exceptionQueueReader.DequeueMany(100)
+				if err != nil {
+					log.Printf("Ошибка при выборке сообщений из exception queue: %v", err)
+					return
+				}
+				if len(exceptionMessages) > 0 {
+					log.Printf("Получено сообщений из exception queue: %d", len(exceptionMessages))
 
-				for i, msg := range exceptionMessages {
-					log.Printf("\n--- Exception Queue Сообщение %d ---", i+1)
-					log.Printf("MessageID: %s", msg.MessageID)
-					log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
+					for i, msg := range exceptionMessages {
+						log.Printf("\n--- Exception Queue Сообщение %d ---", i+1)
+						log.Printf("MessageID: %s", msg.MessageID)
+						log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
 
-					// Парсим XML сообщение
-					parsed, err := exceptionQueueReader.ParseXMLMessage(msg)
-					if err != nil {
-						log.Printf("Ошибка парсинга XML: %v", err)
-					} else {
-						// Выводим распарсенные данные в JSON формате для читаемости
-						jsonData, _ := json.MarshalIndent(parsed, "", "  ")
-						log.Printf("Распарсенные данные:\n%s", string(jsonData))
+						// Парсим XML сообщение
+						parsed, err := exceptionQueueReader.ParseXMLMessage(msg)
+						if err != nil {
+							log.Printf("Ошибка парсинга XML: %v", err)
+						} else {
+							// Выводим распарсенные данные в JSON формате для читаемости
+							jsonData, _ := json.MarshalIndent(parsed, "", "  ")
+							log.Printf("Распарсенные данные:\n%s", string(jsonData))
+						}
 					}
 				}
-			}
+			}()
 		}
 
 		// Пауза между циклами: 0.5 секунды (аналогично Python: time.sleep(settings.main_circle_pause))
