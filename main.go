@@ -57,7 +57,7 @@ func main() {
 		} else {
 			log.Printf("Exception Queue: %s", exceptionQueueReader.GetQueueName())
 			log.Println("Обработка exception queue включена")
-			exceptionQueueReader.SetWaitTimeout(10)
+			exceptionQueueReader.SetWaitTimeout(25)
 		}
 	}
 
