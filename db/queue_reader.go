@@ -630,20 +630,38 @@ func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{
 
 // extractCDATAContent извлекает содержимое из CDATA секции, если оно там есть
 // CDATA формат: <![CDATA[содержимое]]>
+// Обрабатывает различные варианты: CDATA в начале/конце, с пробелами, уже развернутый XML
 func extractCDATAContent(s string) string {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
 
-	// Проверяем, начинается ли строка с CDATA
 	cdataStart := "<![CDATA["
 	cdataEnd := "]]>"
 
-	if strings.HasPrefix(s, cdataStart) && strings.HasSuffix(s, cdataEnd) {
-		// Извлекаем содержимое между <![CDATA[ и ]]>
-		content := s[len(cdataStart) : len(s)-len(cdataEnd)]
-		return strings.TrimSpace(content)
+	// Ищем начало CDATA в любом месте строки
+	startIdx := strings.Index(s, cdataStart)
+	if startIdx != -1 {
+		// Нашли начало CDATA - ищем конец после начала
+		endIdx := strings.Index(s[startIdx+len(cdataStart):], cdataEnd)
+		if endIdx != -1 {
+			// Извлекаем содержимое между <![CDATA[ и ]]>
+			contentStart := startIdx + len(cdataStart)
+			contentEnd := startIdx + len(cdataStart) + endIdx
+			content := s[contentStart:contentEnd]
+			return strings.TrimSpace(content)
+		}
 	}
 
-	// Если это не CDATA, возвращаем исходную строку
+	// Если CDATA не найден, возможно содержимое уже развернуто
+	// Проверяем, является ли строка валидным XML (начинается с <)
+	if strings.HasPrefix(strings.TrimSpace(s), "<") {
+		// Содержимое уже развернуто, возвращаем как есть
+		return s
+	}
+
+	// Если ничего не подошло, возвращаем исходную строку
 	return s
 }
 
