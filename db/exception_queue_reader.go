@@ -296,47 +296,6 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	return msg, nil
 }
 
-// DequeueOne извлекает одно сообщение из exception queue (для обратной совместимости)
-func (eqr *ExceptionQueueReader) DequeueOne() (*QueueMessage, error) {
-	messages, err := eqr.DequeueMany(1)
-	if err != nil {
-		return nil, err
-	}
-	if len(messages) == 0 {
-		return nil, nil
-	}
-	return messages[0], nil
-}
-
-// DequeueAll извлекает все доступные сообщения из exception queue
-func (eqr *ExceptionQueueReader) DequeueAll() ([]*QueueMessage, error) {
-	log.Println("Начало выборки всех сообщений из exception queue")
-
-	var messages []*QueueMessage
-	count := 0
-
-	for {
-		msg, err := eqr.DequeueOne()
-		if err != nil {
-			return messages, fmt.Errorf("ошибка при извлечении сообщения: %w", err)
-		}
-
-		if msg == nil {
-			// Очередь пуста
-			break
-		}
-
-		messages = append(messages, msg)
-		count++
-
-		// Небольшая задержка между сообщениями
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	log.Printf("Выборка завершена. Всего прочитано сообщений из exception queue: %d", count)
-	return messages, nil
-}
-
 // ParseXMLMessage парсит XML сообщение из exception queue
 // Использует ту же логику парсинга, что и обычная очередь
 func (eqr *ExceptionQueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{}, error) {
