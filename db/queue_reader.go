@@ -412,48 +412,6 @@ func (qr *QueueReader) getQueueTableName() string {
 	return ""
 }
 
-// DequeueOne извлекает одно сообщение из очереди (для обратной совместимости)
-func (qr *QueueReader) DequeueOne() (*QueueMessage, error) {
-	messages, err := qr.DequeueMany(1)
-	if err != nil {
-		return nil, err
-	}
-	if len(messages) == 0 {
-		return nil, nil
-	}
-	return messages[0], nil
-}
-
-// DequeueAll извлекает все доступные сообщения из очереди
-// Возвращает слайс сообщений
-func (qr *QueueReader) DequeueAll() ([]*QueueMessage, error) {
-	log.Println("Начало выборки всех сообщений из очереди")
-
-	var messages []*QueueMessage
-	count := 0
-
-	for {
-		msg, err := qr.DequeueOne()
-		if err != nil {
-			return messages, fmt.Errorf("ошибка при извлечении сообщения: %w", err)
-		}
-
-		if msg == nil {
-			// Очередь пуста
-			break
-		}
-
-		messages = append(messages, msg)
-		count++
-
-		// Небольшая задержка между сообщениями
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	log.Printf("Выборка завершена. Всего прочитано сообщений: %d", count)
-	return messages, nil
-}
-
 // ParseXMLMessage парсит XML сообщение из очереди
 // Возвращает map с данными из XML
 // Структура XML: /root/head/date_active_from и /root/body (содержит внутренний XML)
