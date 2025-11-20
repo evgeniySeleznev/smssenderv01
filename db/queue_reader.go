@@ -69,6 +69,14 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 		count = 1
 	}
 
+	// Один лог о попытке получить N сообщений
+	consumerName := qr.consumerName
+	if consumerName == "" {
+		consumerName = "NULL"
+	}
+	log.Printf("Попытка извлечения до %d сообщений из очереди %s (consumer: %s, timeout: %d сек)",
+		count, qr.queueName, consumerName, qr.waitTimeout)
+
 	var messages []*QueueMessage
 
 	// Извлекаем сообщения по одному (аналогично Python, где deqmany тоже работает последовательно)
@@ -100,8 +108,6 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	if consumerName == "" {
 		consumerName = "NULL"
 	}
-	log.Printf("Попытка извлечения сообщения из очереди %s (consumer: %s, timeout: %d сек)",
-		qr.queueName, consumerName, qr.waitTimeout)
 
 	// Отладочный запрос: проверяем, есть ли сообщения в очереди
 	// Получаем имя таблицы очереди
