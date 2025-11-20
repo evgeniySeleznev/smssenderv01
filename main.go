@@ -64,7 +64,7 @@ func main() {
 	for {
 		// Получаем сообщения из основной очереди (аналогично Python: messages = queue.deqmany(settings.query_number))
 		// Используем DequeueMany с количеством сообщений (аналогично settings.query_number = 50)
-		messages, err := queueReader.DequeueMany(50)
+		messages, err := queueReader.DequeueMany(100)
 		if err != nil {
 			log.Printf("Ошибка при выборке сообщений: %v", err)
 			// При ошибке ждем перед следующей попыткой
