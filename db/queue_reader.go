@@ -157,21 +157,60 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 		}
 	}
 
-	// Создаем временную функцию, которая делает dequeue и возвращает данные через SELECT
-	// Используем пакетную переменную для хранения результата dequeue между вызовами
-	// Это позволяет использовать XMLSerialize для преобразования XMLType в CLOB
-	createFunctionSQL := `
+	// Создаем пакет с переменными и функциями для доступа к ним
+	// В Oracle нельзя напрямую обращаться к переменным пакета в SELECT, нужны функции-геттеры
+	createPackageSQL := `
 		CREATE OR REPLACE PACKAGE temp_queue_pkg AS
 			g_msgid RAW(16);
 			g_payload XMLType;
 			g_success NUMBER := 0;
 			g_error_code NUMBER := 0;
 			g_error_msg VARCHAR2(4000);
+			
+			FUNCTION get_success RETURN NUMBER;
+			FUNCTION get_error_code RETURN NUMBER;
+			FUNCTION get_error_msg RETURN VARCHAR2;
+			FUNCTION get_msgid RETURN RAW;
+			FUNCTION get_payload RETURN XMLType;
 		END temp_queue_pkg;
 	`
-	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, createFunctionSQL)
+	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, createPackageSQL)
 	if err != nil {
 		log.Printf("Предупреждение: не удалось создать пакет (возможно, уже существует): %v", err)
+	}
+
+	// Создаем тело пакета с реализацией функций
+	createPackageBodySQL := `
+		CREATE OR REPLACE PACKAGE BODY temp_queue_pkg AS
+			FUNCTION get_success RETURN NUMBER IS
+			BEGIN
+				RETURN g_success;
+			END;
+			
+			FUNCTION get_error_code RETURN NUMBER IS
+			BEGIN
+				RETURN g_error_code;
+			END;
+			
+			FUNCTION get_error_msg RETURN VARCHAR2 IS
+			BEGIN
+				RETURN g_error_msg;
+			END;
+			
+			FUNCTION get_msgid RETURN RAW IS
+			BEGIN
+				RETURN g_msgid;
+			END;
+			
+			FUNCTION get_payload RETURN XMLType IS
+			BEGIN
+				RETURN g_payload;
+			END;
+		END temp_queue_pkg;
+	`
+	_, err = qr.dbConn.db.ExecContext(qr.dbConn.ctx, createPackageBodySQL)
+	if err != nil {
+		log.Printf("Предупреждение: не удалось создать тело пакета (возможно, уже существует): %v", err)
 	}
 
 	// PL/SQL блок для выполнения dequeue и сохранения результата в пакетные переменные
@@ -266,8 +305,8 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
-	// Проверяем успешность dequeue через SELECT из пакетной переменной
-	checkSuccessSQL := `SELECT temp_queue_pkg.g_success, temp_queue_pkg.g_error_code, temp_queue_pkg.g_error_msg FROM DUAL`
+	// Проверяем успешность dequeue через функции пакета
+	checkSuccessSQL := `SELECT temp_queue_pkg.get_success(), temp_queue_pkg.get_error_code(), temp_queue_pkg.get_error_msg() FROM DUAL`
 	var successFlag, errorCode sql.NullInt64
 	var errorMsg sql.NullString
 	err = tx.QueryRowContext(qr.dbConn.ctx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
@@ -295,8 +334,9 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 
 	// Используем XMLSerialize для получения CLOB из XMLType (аналогично Python)
 	// SELECT XMLSerialize(DOCUMENT :xml AS CLOB) FROM DUAL
-	query := `SELECT RAWTOHEX(temp_queue_pkg.g_msgid) as msgid, 
-	             XMLSerialize(DOCUMENT temp_queue_pkg.g_payload AS CLOB) as payload 
+	// Используем функции пакета для доступа к переменным
+	query := `SELECT RAWTOHEX(temp_queue_pkg.get_msgid()) as msgid, 
+	             XMLSerialize(DOCUMENT temp_queue_pkg.get_payload() AS CLOB) as payload 
 	          FROM DUAL`
 
 	rows, err := tx.QueryContext(qr.dbConn.ctx, query)
