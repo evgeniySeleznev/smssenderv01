@@ -63,10 +63,13 @@ func (d *DBConnection) OpenConnection() error {
 		return fmt.Errorf("ошибка sql.Open: %w", err)
 	}
 
-	// Базовые настройки пула
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(30 * time.Minute)
+	// Настройки пула согласно требованиям:
+	// max=200, min=1 (по умолчанию), increment=10 (не поддерживается напрямую в sql.DB)
+	// max_lifetime_session=300 секунд
+	db.SetMaxOpenConns(200)
+	db.SetMaxIdleConns(10)                   // Аналог increment
+	db.SetConnMaxLifetime(300 * time.Second) // 300 секунд = 5 минут
+	db.SetConnMaxIdleTime(300 * time.Second)
 
 	// Проверка соединения
 	if err := db.PingContext(d.ctx); err != nil {
@@ -88,6 +91,35 @@ func (d *DBConnection) CloseConnection() {
 		_ = d.db.Close()
 	}
 	log.Println("Database connection closed.")
+}
+
+// CheckConnection проверяет соединение с БД (аналогично Python: connection.ping())
+func (d *DBConnection) CheckConnection() bool {
+	if d.db == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.db.PingContext(ctx); err != nil {
+		log.Printf("Ошибка проверки соединения: %v", err)
+		return false
+	}
+	return true
+}
+
+// ClosePool закрывает пул соединений (для пересоздания)
+func (d *DBConnection) ClosePool() {
+	if d.db != nil {
+		_ = d.db.Close()
+		d.db = nil
+		log.Println("Пул соединений закрыт.")
+	}
+}
+
+// RecreatePool пересоздает пул соединений
+func (d *DBConnection) RecreatePool() error {
+	d.ClosePool()
+	return d.OpenConnection()
 }
 
 // GetConfig возвращает конфигурацию для доступа к настройкам.
