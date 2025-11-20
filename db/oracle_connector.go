@@ -14,11 +14,10 @@ import (
 
 // DBConnection — аналог Python-класса, инкапсулирует соединение и операции с БД.
 type DBConnection struct {
-	cfg       *ini.File
-	db        *sql.DB
-	ctx       context.Context
-	cancel    context.CancelFunc
-	lastError error
+	cfg    *ini.File
+	db     *sql.DB
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewDBConnection загружает конфигурацию из settings/db_settings.ini.
