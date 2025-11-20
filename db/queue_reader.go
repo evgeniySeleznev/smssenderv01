@@ -603,6 +603,10 @@ func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{
 			return nil, fmt.Errorf("ошибка парсинга XML (body пуст, пробуем прямой парсинг): %w, XML: %s", err, truncateString(msg.XMLPayload, 500))
 		}
 	} else {
+		// Извлекаем содержимое из CDATA, если оно там есть
+		// CDATA формат: <![CDATA[содержимое]]>
+		bodyXML = extractCDATAContent(bodyXML)
+
 		// Парсим внутренний XML из body
 		if err := xml.Unmarshal([]byte(bodyXML), &smsData); err != nil {
 			return nil, fmt.Errorf("ошибка парсинга внутреннего XML из body: %w, body content: %s", err, truncateString(bodyXML, 500))
@@ -622,6 +626,25 @@ func (qr *QueueReader) ParseXMLMessage(msg *QueueMessage) (map[string]interface{
 	}
 
 	return result, nil
+}
+
+// extractCDATAContent извлекает содержимое из CDATA секции, если оно там есть
+// CDATA формат: <![CDATA[содержимое]]>
+func extractCDATAContent(s string) string {
+	s = strings.TrimSpace(s)
+
+	// Проверяем, начинается ли строка с CDATA
+	cdataStart := "<![CDATA["
+	cdataEnd := "]]>"
+
+	if strings.HasPrefix(s, cdataStart) && strings.HasSuffix(s, cdataEnd) {
+		// Извлекаем содержимое между <![CDATA[ и ]]>
+		content := s[len(cdataStart) : len(s)-len(cdataEnd)]
+		return strings.TrimSpace(content)
+	}
+
+	// Если это не CDATA, возвращаем исходную строку
+	return s
 }
 
 // truncateString обрезает строку до указанной длины (вспомогательная функция)
