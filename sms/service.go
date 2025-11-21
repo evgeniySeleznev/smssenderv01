@@ -222,17 +222,32 @@ func ParseSMSMessage(parsed map[string]interface{}) (*SMSMessage, error) {
 
 	// Парсинг date_active_from (опционально)
 	if dateActiveFromStr, ok := parsed["date_active_from"].(string); ok && dateActiveFromStr != "" {
-		dateActiveFrom, err := time.Parse("2006-01-02T15:04:05", dateActiveFromStr)
-		if err != nil {
-			// Пробуем другой формат
-			dateActiveFrom, err = time.Parse("2006-01-02 15:04:05", dateActiveFromStr)
-			if err != nil {
-				log.Printf("Предупреждение: не удалось распарсить date_active_from: %s, ошибка: %v", dateActiveFromStr, err)
-			} else {
+		// Пробуем различные форматы даты
+		dateFormats := []string{
+			"2006-01-02T15:04:05", // ISO с T
+			"2006-01-02 15:04:05", // ISO с пробелом и секундами
+			"2006-01-02 15:04",    // ISO с пробелом без секунд
+			"02.01.2006 15:04:05", // DD.MM.YYYY с секундами
+			"02.01.2006 15:04",    // DD.MM.YYYY без секунд
+			"02.01.2006T15:04:05", // DD.MM.YYYY с T и секундами
+			"02.01.2006T15:04",    // DD.MM.YYYY с T без секунд
+		}
+
+		var dateActiveFrom time.Time
+		var err error
+		parsed := false
+
+		for _, format := range dateFormats {
+			dateActiveFrom, err = time.Parse(format, dateActiveFromStr)
+			if err == nil {
 				msg.DateActiveFrom = &dateActiveFrom
+				parsed = true
+				break
 			}
-		} else {
-			msg.DateActiveFrom = &dateActiveFrom
+		}
+
+		if !parsed {
+			log.Printf("Предупреждение: не удалось распарсить date_active_from: %s, ошибка: %v", dateActiveFromStr, err)
 		}
 	}
 
