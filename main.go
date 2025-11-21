@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"oracle-client/db"
+	"oracle-client/sms"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,16 @@ func main() {
 	}
 
 	log.Println("Успешно подключено к Oracle базе данных")
+
+	// Загружаем конфигурацию SMS сервиса
+	smsConfig, err := sms.LoadConfig(dbConn.GetConfig())
+	if err != nil {
+		log.Fatalf("Ошибка загрузки конфигурации SMS: %v", err)
+	}
+	log.Printf("Конфигурация SMS загружена. Режим Silent: %v", smsConfig.Mode.Silent)
+
+	// Создаем SMS сервис
+	smsService := sms.NewService(smsConfig)
 
 	// Создаем QueueReader
 	queueReader, err := db.NewQueueReader(dbConn)
@@ -73,11 +84,30 @@ func main() {
 			parsed, err := queueReader.ParseXMLMessage(msg)
 			if err != nil {
 				log.Printf("Ошибка парсинга XML: %v", err)
-			} else {
-				// Выводим распарсенные данные в JSON формате для читаемости
-				jsonData, _ := json.MarshalIndent(parsed, "", "  ")
-				log.Printf("Распарсенные данные:\n%s", string(jsonData))
+				continue
 			}
+
+			// Выводим распарсенные данные в JSON формате для читаемости
+			jsonData, _ := json.MarshalIndent(parsed, "", "  ")
+			log.Printf("Распарсенные данные:\n%s", string(jsonData))
+
+			// Преобразуем распарсенные данные в SMSMessage
+			smsMsg, err := sms.ParseSMSMessage(parsed)
+			if err != nil {
+				log.Printf("Ошибка преобразования в SMSMessage: %v", err)
+				continue
+			}
+
+			// Обрабатываем и отправляем SMS
+			response, err := smsService.ProcessSMS(*smsMsg)
+			if err != nil {
+				log.Printf("Ошибка обработки SMS: %v", err)
+				continue
+			}
+
+			// Логируем результат
+			log.Printf("Результат отправки SMS: TaskID=%d, Status=%d, MessageID=%s, ErrorText=%s",
+				response.TaskID, response.Status, response.MessageID, response.ErrorText)
 		}
 		log.Printf("Батч %d обработан", batchNum)
 	}
@@ -221,11 +251,30 @@ func main() {
 						parsed, err := exceptionQueueReader.ParseXMLMessage(msg)
 						if err != nil {
 							log.Printf("Ошибка парсинга XML: %v", err)
-						} else {
-							// Выводим распарсенные данные в JSON формате для читаемости
-							jsonData, _ := json.MarshalIndent(parsed, "", "  ")
-							log.Printf("Распарсенные данные:\n%s", string(jsonData))
+							continue
 						}
+
+						// Выводим распарсенные данные в JSON формате для читаемости
+						jsonData, _ := json.MarshalIndent(parsed, "", "  ")
+						log.Printf("Распарсенные данные:\n%s", string(jsonData))
+
+						// Преобразуем распарсенные данные в SMSMessage
+						smsMsg, err := sms.ParseSMSMessage(parsed)
+						if err != nil {
+							log.Printf("Ошибка преобразования в SMSMessage: %v", err)
+							continue
+						}
+
+						// Обрабатываем и отправляем SMS из exception queue
+						response, err := smsService.ProcessSMS(*smsMsg)
+						if err != nil {
+							log.Printf("Ошибка обработки SMS из exception queue: %v", err)
+							continue
+						}
+
+						// Логируем результат
+						log.Printf("Результат отправки SMS из exception queue: TaskID=%d, Status=%d, MessageID=%s, ErrorText=%s",
+							response.TaskID, response.Status, response.MessageID, response.ErrorText)
 					}
 				}
 			}()
