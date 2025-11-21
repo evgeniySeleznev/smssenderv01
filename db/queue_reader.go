@@ -85,8 +85,20 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 	var messages []*QueueMessage
 
 	// Извлекаем сообщения по одному (аналогично Python, где deqmany тоже работает последовательно)
+	// Для первого сообщения используем полный waitTimeout, для последующих - минимальный (50 мс),
+	// чтобы быстро понять, что очередь пуста, и не ждать 10 секунд
 	for i := 0; i < count; i++ {
-		msg, err := qr.dequeueOneMessage()
+		// Для первого сообщения используем полный timeout, для остальных - минимальный
+		var timeout float64
+		if i == 0 {
+			timeout = float64(qr.waitTimeout)
+		} else {
+			// Для последующих сообщений используем минимальный timeout (50 миллисекунд = 0.05 секунды)
+			// чтобы быстро определить, что очередь пуста
+			timeout = 0.05
+		}
+
+		msg, err := qr.dequeueOneMessageWithTimeout(timeout)
 		if err != nil {
 			return messages, err
 		}
@@ -161,11 +173,16 @@ func (qr *QueueReader) ensurePackageExists() error {
 	return nil
 }
 
-// dequeueOneMessage извлекает одно сообщение из очереди
+// dequeueOneMessage извлекает одно сообщение из очереди с использованием waitTimeout из настроек
+func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
+	return qr.dequeueOneMessageWithTimeout(float64(qr.waitTimeout))
+}
+
+// dequeueOneMessageWithTimeout извлекает одно сообщение из очереди с указанным timeout (в секундах, может быть дробным)
 // По аналогии с Python: queue.deqmany() -> получаем массив сообщений
 // Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
 // Использует подход с функцией, возвращающей данные через SELECT с XMLSerialize (аналогично Python)
-func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
+func (qr *QueueReader) dequeueOneMessageWithTimeout(timeout float64) (*QueueMessage, error) {
 	// Используем подход аналогичный Python:
 	// cursor.execute("SELECT XMLSerialize(DOCUMENT :xml AS CLOB) FROM DUAL", xml=message.payload)
 	// Создаем функцию, которая делает dequeue и возвращает данные через SELECT с XMLSerialize
@@ -241,9 +258,9 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 
 	// Выполняем PL/SQL блок для dequeue
 	_, err = tx.ExecContext(qr.dbConn.ctx, plsql,
-		qr.waitTimeout, // :1
-		consumerParam,  // :2
-		qr.queueName,   // :3
+		timeout,       // :1 - используем переданный timeout
+		consumerParam, // :2
+		qr.queueName,  // :3
 	)
 
 	if err != nil {
@@ -258,7 +275,7 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 			return nil, nil
 		}
 		log.Printf("Ошибка выполнения PL/SQL для dequeue: %v", err)
-		log.Printf("Детали ошибки: consumer='%s', queue='%s', timeout=%d", qr.consumerName, qr.queueName, qr.waitTimeout)
+		log.Printf("Детали ошибки: consumer='%s', queue='%s', timeout=%.2f", qr.consumerName, qr.queueName, timeout)
 		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
