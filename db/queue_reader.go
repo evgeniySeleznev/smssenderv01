@@ -173,11 +173,6 @@ func (qr *QueueReader) ensurePackageExists() error {
 	return nil
 }
 
-// dequeueOneMessage извлекает одно сообщение из очереди с использованием waitTimeout из настроек
-func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
-	return qr.dequeueOneMessageWithTimeout(float64(qr.waitTimeout))
-}
-
 // dequeueOneMessageWithTimeout извлекает одно сообщение из очереди с указанным timeout (в секундах, может быть дробным)
 // По аналогии с Python: queue.deqmany() -> получаем массив сообщений
 // Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
