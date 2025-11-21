@@ -77,6 +77,11 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 	log.Printf("Попытка извлечения до %d сообщений из очереди %s (consumer: %s, timeout: %d сек)",
 		count, qr.queueName, consumerName, qr.waitTimeout)
 
+	// Создаем пакет один раз перед извлечением всех сообщений
+	if err := qr.ensurePackageExists(); err != nil {
+		return nil, fmt.Errorf("ошибка создания пакета: %w", err)
+	}
+
 	var messages []*QueueMessage
 
 	// Извлекаем сообщения по одному (аналогично Python, где deqmany тоже работает последовательно)
@@ -95,74 +100,8 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 	return messages, nil
 }
 
-// dequeueOneMessage извлекает одно сообщение из очереди
-// По аналогии с Python: queue.deqmany() -> получаем массив сообщений
-// Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
-// Использует подход с функцией, возвращающей данные через SELECT с XMLSerialize (аналогично Python)
-func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
-	// Используем подход аналогичный Python:
-	// cursor.execute("SELECT XMLSerialize(DOCUMENT :xml AS CLOB) FROM DUAL", xml=message.payload)
-	// Создаем функцию, которая делает dequeue и возвращает данные через SELECT с XMLSerialize
-
-	consumerName := qr.consumerName
-	if consumerName == "" {
-		consumerName = "NULL"
-	}
-
-	// Отладочный запрос: проверяем, есть ли сообщения в очереди
-	// Получаем имя таблицы очереди
-	queueTable := qr.getQueueTableName()
-	if queueTable != "" {
-		// Проверяем все сообщения в очереди
-		checkQueryAll := fmt.Sprintf(`
-			SELECT COUNT(*) as msg_count, 
-			       COUNT(DISTINCT consumer_name) as consumer_count,
-			       LISTAGG(DISTINCT consumer_name, ', ') WITHIN GROUP (ORDER BY consumer_name) as consumers
-			FROM %s 
-			WHERE state = 0
-		`, queueTable)
-
-		checkRows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, checkQueryAll)
-		if err == nil {
-			if checkRows.Next() {
-				var msgCount, consumerCount sql.NullInt64
-				var consumers sql.NullString
-				if err := checkRows.Scan(&msgCount, &consumerCount, &consumers); err == nil {
-					if msgCount.Valid {
-						log.Printf("Отладка: в таблице очереди найдено %d сообщений (state=0)", msgCount.Int64)
-						if consumerCount.Valid && consumerCount.Int64 > 0 {
-							log.Printf("Отладка: найдено %d различных consumers: %s", consumerCount.Int64, getStringValue(consumers))
-						}
-					}
-				}
-			}
-			checkRows.Close()
-		}
-
-		// Проверяем сообщения для конкретного consumer
-		if qr.consumerName != "" {
-			checkQuery := fmt.Sprintf(`
-				SELECT COUNT(*) as msg_count 
-				FROM %s 
-				WHERE state = 0 
-				AND consumer_name = :consumer_name
-			`, queueTable)
-
-			checkRows, err := qr.dbConn.db.QueryContext(qr.dbConn.ctx, checkQuery,
-				sql.Named("consumer_name", qr.consumerName),
-			)
-			if err == nil {
-				if checkRows.Next() {
-					var msgCount sql.NullInt64
-					if err := checkRows.Scan(&msgCount); err == nil && msgCount.Valid {
-						log.Printf("Отладка: для consumer '%s' найдено %d сообщений", qr.consumerName, msgCount.Int64)
-					}
-				}
-				checkRows.Close()
-			}
-		}
-	}
-
+// ensurePackageExists создает пакет Oracle для работы с очередью, если он еще не существует
+func (qr *QueueReader) ensurePackageExists() error {
 	// Создаем пакет с переменными и функциями для доступа к ним
 	// В Oracle нельзя напрямую обращаться к переменным пакета в SELECT, нужны функции-геттеры
 	createPackageSQL := `
@@ -182,7 +121,7 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	`
 	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, createPackageSQL)
 	if err != nil {
-		log.Printf("Предупреждение: не удалось создать пакет (возможно, уже существует): %v", err)
+		return fmt.Errorf("не удалось создать пакет: %w", err)
 	}
 
 	// Создаем тело пакета с реализацией функций
@@ -216,8 +155,20 @@ func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	`
 	_, err = qr.dbConn.db.ExecContext(qr.dbConn.ctx, createPackageBodySQL)
 	if err != nil {
-		log.Printf("Предупреждение: не удалось создать тело пакета (возможно, уже существует): %v", err)
+		return fmt.Errorf("не удалось создать тело пакета: %w", err)
 	}
+
+	return nil
+}
+
+// dequeueOneMessage извлекает одно сообщение из очереди
+// По аналогии с Python: queue.deqmany() -> получаем массив сообщений
+// Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
+// Использует подход с функцией, возвращающей данные через SELECT с XMLSerialize (аналогично Python)
+func (qr *QueueReader) dequeueOneMessage() (*QueueMessage, error) {
+	// Используем подход аналогичный Python:
+	// cursor.execute("SELECT XMLSerialize(DOCUMENT :xml AS CLOB) FROM DUAL", xml=message.payload)
+	// Создаем функцию, которая делает dequeue и возвращает данные через SELECT с XMLSerialize
 
 	// PL/SQL блок для выполнения dequeue и сохранения результата в пакетные переменные
 	plsql := `
