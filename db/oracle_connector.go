@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	_ "github.com/godror/godror"
@@ -18,6 +19,7 @@ type DBConnection struct {
 	db     *sql.DB
 	ctx    context.Context
 	cancel context.CancelFunc
+	mu     sync.Mutex // Блокировка для потокобезопасного доступа к БД
 }
 
 // NewDBConnection загружает конфигурацию из settings/db_settings.ini.
@@ -125,4 +127,39 @@ func (d *DBConnection) RecreatePool() error {
 // GetConfig возвращает конфигурацию для доступа к настройкам.
 func (d *DBConnection) GetConfig() *ini.File {
 	return d.cfg
+}
+
+// GetTestPhone получает тестовый номер телефона из Oracle через процедуру pcsystem.PKG_SMS.GET_TEST_PHONE()
+// Аналог C# метода OracleAdapter.LockGetTestPhone
+// Использует блокировку для потокобезопасности
+func (d *DBConnection) GetTestPhone() (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.db == nil {
+		return "", fmt.Errorf("соединение с БД не открыто")
+	}
+
+	// Проверяем соединение
+	if !d.CheckConnection() {
+		return "", fmt.Errorf("соединение с БД недоступно")
+	}
+
+	// Вызываем функцию Oracle: pcsystem.PKG_SMS.GET_TEST_PHONE()
+	// Функция возвращает VARCHAR2(500) - тестовый номер телефона
+	var testPhone string
+	query := "SELECT pcsystem.PKG_SMS.GET_TEST_PHONE() FROM DUAL"
+
+	err := d.db.QueryRowContext(d.ctx, query).Scan(&testPhone)
+	if err != nil {
+		log.Printf("Ошибка выполнения pcsystem.PKG_SMS.GET_TEST_PHONE(): %v", err)
+		return "", fmt.Errorf("ошибка получения тестового номера: %w", err)
+	}
+
+	if testPhone == "" {
+		return "", fmt.Errorf("ошибка получения тестового номера: номер пуст")
+	}
+
+	log.Printf("pcsystem.PKG_SMS.GET_TEST_PHONE() result: L_PHONE_NUMBER = %s", testPhone)
+	return testPhone, nil
 }

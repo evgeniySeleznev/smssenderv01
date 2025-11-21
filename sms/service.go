@@ -28,11 +28,15 @@ type SMSResponse struct {
 	SentAt    time.Time
 }
 
+// TestPhoneGetter представляет функцию для получения тестового номера телефона
+type TestPhoneGetter func() (string, error)
+
 // Service представляет сервис для отправки SMS
 type Service struct {
 	cfg          *Config
 	mu           sync.RWMutex
 	lastActivity map[int]time.Time // Последняя активность по каждому SMPP провайдеру
+	getTestPhone TestPhoneGetter   // Функция для получения тестового номера (опционально)
 }
 
 // NewService создает новый сервис отправки SMS
@@ -40,7 +44,15 @@ func NewService(cfg *Config) *Service {
 	return &Service{
 		cfg:          cfg,
 		lastActivity: make(map[int]time.Time),
+		getTestPhone: nil, // По умолчанию не установлена
 	}
+}
+
+// SetTestPhoneGetter устанавливает функцию для получения тестового номера
+func (s *Service) SetTestPhoneGetter(getter TestPhoneGetter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getTestPhone = getter
 }
 
 // ProcessSMS обрабатывает распарсенное сообщение из Oracle и отправляет SMS
@@ -77,12 +89,31 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 		}
 	}
 
-	// Режим Debug - замена номера на тестовый (пока не реализовано получение из БД)
+	// Режим Debug - замена номера на тестовый
 	phoneNumber := msg.PhoneNumber
 	if s.cfg.Mode.Debug {
-		log.Printf("Режим Debug: исходный номер %s будет заменен на тестовый", phoneNumber)
-		// TODO: Получение тестового номера из Oracle через pcsystem.PKG_SMS.GET_TEST_PHONE()
-		// phoneNumber = testNumber
+		s.mu.RLock()
+		getTestPhone := s.getTestPhone
+		s.mu.RUnlock()
+
+		if getTestPhone != nil {
+			testNumber, err := getTestPhone()
+			if err != nil {
+				errText := fmt.Sprintf("Ошибка получения тестового номера: %v", err)
+				log.Printf("Ошибка: %s", errText)
+				return &SMSResponse{
+					TaskID:    msg.TaskID,
+					MessageID: "",
+					Status:    3, // ошибка
+					ErrorText: errText,
+					SentAt:    time.Now(),
+				}, nil
+			}
+			log.Printf("Режим Debug: номер %s заменен на тестовый номер %s", phoneNumber, testNumber)
+			phoneNumber = testNumber
+		} else {
+			log.Printf("Режим Debug: функция получения тестового номера не установлена, используется исходный номер %s", phoneNumber)
+		}
 	}
 
 	// Отправка SMS

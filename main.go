@@ -36,6 +36,9 @@ func main() {
 	// Создаем SMS сервис
 	smsService := sms.NewService(smsConfig)
 
+	// Устанавливаем функцию получения тестового номера для режима Debug
+	smsService.SetTestPhoneGetter(dbConn.GetTestPhone)
+
 	// Создаем QueueReader
 	queueReader, err := db.NewQueueReader(dbConn)
 	if err != nil {
