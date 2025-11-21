@@ -86,6 +86,12 @@ func main() {
 	iterationCount := 0
 	const poolRecreateInterval = 100 // Пересоздание пула каждые 100 итераций
 
+	// WaitGroup для отслеживания всех обработчиков сообщений
+	var allHandlersWg sync.WaitGroup
+	// Флаг для отслеживания необходимости завершения
+	var shouldExit bool
+	var exitMu sync.Mutex
+
 	// Бесконечный цикл чтения из очереди (аналогично Python: while True)
 	for {
 		iterationCount++
@@ -117,9 +123,35 @@ func main() {
 			log.Println("Переподключение выполнено успешно")
 		}
 
+		// Создаем новый канал для сигнала на каждой итерации
+		iterationSignalChan := make(chan struct{})
+
+		// Запускаем горутину с таймером на 2 минуты
+		allHandlersWg.Add(1)
+		go func() {
+			defer allHandlersWg.Done()
+			timer := time.NewTimer(2 * time.Minute)
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+				// Таймер сработал - не получили ответ за 2 минуты
+				log.Println("Таймаут: не получен ответ из DequeueMany в течение 2 минут, завершаем работу...")
+				exitMu.Lock()
+				shouldExit = true
+				exitMu.Unlock()
+			case <-iterationSignalChan:
+				// Получили сигнал - ответ получен, прекращаем работу горутины
+				return
+			}
+		}()
+
 		// Получаем сообщения из основной очереди (аналогично Python: messages = queue.deqmany(settings.query_number))
 		// Используем DequeueMany с количеством сообщений (аналогично settings.query_number = 100)
 		messages, err := queueReader.DequeueMany(100)
+
+		// Отправляем сигнал в горутину о получении ответа (независимо от результата)
+		close(iterationSignalChan)
 		if err != nil {
 			log.Printf("Ошибка при выборке сообщений: %v", err)
 			// При ошибке - очистка пула, пауза 5 сек и пересоздание пула
@@ -154,8 +186,10 @@ func main() {
 				batchNum := (i / batchSize) + 1
 
 				wg.Add(1)
+				allHandlersWg.Add(1)
 				go func(batch []*db.QueueMessage, num int) {
 					defer wg.Done()
+					defer allHandlersWg.Done()
 					processMessagesBatch(batch, num)
 				}(batch, batchNum)
 			}
@@ -167,7 +201,9 @@ func main() {
 
 		// Обрабатываем exception queue асинхронно, если включено (чтобы не блокировать основной цикл)
 		if processExceptionQueue && exceptionQueueReader != nil {
+			allHandlersWg.Add(1)
 			go func() {
+				defer allHandlersWg.Done()
 				exceptionMessages, err := exceptionQueueReader.DequeueMany(100)
 				if err != nil {
 					log.Printf("Ошибка при выборке сообщений из exception queue: %v", err)
@@ -194,6 +230,17 @@ func main() {
 				}
 			}()
 		}
+
+		// Проверяем флаг завершения
+		exitMu.Lock()
+		if shouldExit {
+			exitMu.Unlock()
+			log.Println("Ожидание завершения всех обработчиков сообщений...")
+			allHandlersWg.Wait()
+			log.Println("Все обработчики завершены, выход из приложения")
+			return
+		}
+		exitMu.Unlock()
 
 		// Пауза между циклами: 0.5 секунды (аналогично Python: time.sleep(settings.main_circle_pause))
 		// где main_circle_pause = 0.5 секунд
