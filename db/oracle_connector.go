@@ -88,21 +88,6 @@ func (d *DBConnection) CheckConnection() bool {
 	return true
 }
 
-// ClosePool закрывает пул соединений (для пересоздания)
-func (d *DBConnection) ClosePool() {
-	if d.db != nil {
-		_ = d.db.Close()
-		d.db = nil
-		log.Println("Пул соединений закрыт.")
-	}
-}
-
-// RecreatePool пересоздает пул соединений
-func (d *DBConnection) RecreatePool() error {
-	d.ClosePool()
-	return d.OpenConnection()
-}
-
 // Reconnect переподключается к базе данных с пересозданием пула соединений
 func (d *DBConnection) Reconnect() error {
 	d.mu.Lock()
@@ -118,13 +103,17 @@ func (d *DBConnection) Reconnect() error {
 	}
 
 	// Пересоздаем подключение (открываем новый пул)
-	// openConnectionInternal уже логирует открытие соединения
 	if err := d.openConnectionInternal(); err != nil {
 		return fmt.Errorf("ошибка переподключения: %w", err)
 	}
 
 	log.Printf("Переподключение к базе данных выполнено успешно. Пул соединений пересоздан.")
 	return nil
+}
+
+// RecreatePool пересоздает пул соединений (алиас для Reconnect для обратной совместимости)
+func (d *DBConnection) RecreatePool() error {
+	return d.Reconnect()
 }
 
 // openConnectionInternal внутренний метод открытия соединения без блокировки

@@ -118,10 +118,6 @@ func main() {
 		log.Printf("Батч %d обработан", batchNum)
 	}
 
-	// Счетчик итераций для профилактического пересоздания пула
-	iterationCount := 0
-	const poolRecreateInterval = 100 // Пересоздание пула каждые 100 итераций
-
 	// WaitGroup для отслеживания всех обработчиков сообщений
 	var allHandlersWg sync.WaitGroup
 	// Флаг для отслеживания необходимости завершения
@@ -130,28 +126,11 @@ func main() {
 
 	// Бесконечный цикл чтения из очереди (аналогично Python: while True)
 	for {
-		iterationCount++
-
-		// Профилактическое пересоздание пула каждые 100 итераций
-		if iterationCount > poolRecreateInterval {
-			iterationCount = 0
-			log.Println("Профилактическое пересоздание пула соединений...")
-			dbConn.ClosePool()
-			time.Sleep(5 * time.Second)
-			if err := dbConn.RecreatePool(); err != nil {
-				log.Printf("Ошибка пересоздания пула: %v", err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			log.Println("Пул соединений пересоздан успешно")
-		}
-
 		// Проверка соединения перед каждым чтением (аналогично Python: connection.ping())
 		if !dbConn.CheckConnection() {
 			log.Println("Ошибка соединения, переподключение...")
-			dbConn.ClosePool()
 			time.Sleep(5 * time.Second)
-			if err := dbConn.RecreatePool(); err != nil {
+			if err := dbConn.Reconnect(); err != nil {
 				log.Printf("Ошибка переподключения: %v", err)
 				time.Sleep(5 * time.Second)
 				continue
@@ -190,11 +169,10 @@ func main() {
 		close(iterationSignalChan)
 		if err != nil {
 			log.Printf("Ошибка при выборке сообщений: %v", err)
-			// При ошибке - очистка пула, пауза 5 сек и пересоздание пула
+			// При ошибке - переподключение
 			log.Println("Ошибка соединения, переподключение...")
-			dbConn.ClosePool()
 			time.Sleep(5 * time.Second)
-			if err := dbConn.RecreatePool(); err != nil {
+			if err := dbConn.Reconnect(); err != nil {
 				log.Printf("Ошибка переподключения: %v", err)
 				time.Sleep(5 * time.Second)
 			}
