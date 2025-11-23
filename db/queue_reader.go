@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/xml"
 	"errors"
@@ -78,7 +79,9 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 		count, qr.queueName, consumerName, qr.waitTimeout)
 
 	// Создаем пакет один раз перед извлечением всех сообщений
-	if err := qr.ensurePackageExists(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	defer cancel()
+	if err := qr.ensurePackageExists(ctx); err != nil {
 		return nil, fmt.Errorf("ошибка создания пакета: %w", err)
 	}
 
@@ -113,7 +116,7 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 }
 
 // ensurePackageExists создает пакет Oracle для работы с очередью, если он еще не существует
-func (qr *QueueReader) ensurePackageExists() error {
+func (qr *QueueReader) ensurePackageExists(ctx context.Context) error {
 	// Создаем пакет с переменными и функциями для доступа к ним
 	// В Oracle нельзя напрямую обращаться к переменным пакета в SELECT, нужны функции-геттеры
 	createPackageSQL := `
@@ -131,7 +134,7 @@ func (qr *QueueReader) ensurePackageExists() error {
 			FUNCTION get_payload RETURN XMLType;
 		END temp_queue_pkg;
 	`
-	_, err := qr.dbConn.db.ExecContext(qr.dbConn.ctx, createPackageSQL)
+	_, err := qr.dbConn.db.ExecContext(ctx, createPackageSQL)
 	if err != nil {
 		return fmt.Errorf("не удалось создать пакет: %w", err)
 	}
@@ -165,7 +168,7 @@ func (qr *QueueReader) ensurePackageExists() error {
 			END;
 		END temp_queue_pkg;
 	`
-	_, err = qr.dbConn.db.ExecContext(qr.dbConn.ctx, createPackageBodySQL)
+	_, err = qr.dbConn.db.ExecContext(ctx, createPackageBodySQL)
 	if err != nil {
 		return fmt.Errorf("не удалось создать тело пакета: %w", err)
 	}
@@ -243,16 +246,29 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(timeout float64) (*QueueMess
 		consumerParam = strings.TrimSpace(qr.consumerName)
 	}
 
+	// Отмечаем начало операции с БД для предотвращения переподключения во время транзакции
+	qr.dbConn.BeginOperation()
+	defer qr.dbConn.EndOperation()
+
+	// Создаем контекст с таймаутом для транзакции
+	// Таймаут = timeout запроса + небольшой запас для выполнения операций
+	txTimeout := time.Duration(timeout)*time.Second + 5*time.Second
+	if txTimeout > execTimeout {
+		txTimeout = execTimeout
+	}
+	txCtx, txCancel := context.WithTimeout(context.Background(), txTimeout)
+	defer txCancel()
+
 	// Выполняем операции в транзакции для обеспечения атомарности
 	// Это важно для правильной работы с REMOVE режимом dequeue
-	tx, err := qr.dbConn.db.BeginTx(qr.dbConn.ctx, nil)
+	tx, err := qr.dbConn.db.BeginTx(txCtx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка начала транзакции: %w", err)
 	}
 	defer tx.Rollback() // Откатываем, если что-то пойдет не так
 
 	// Выполняем PL/SQL блок для dequeue
-	_, err = tx.ExecContext(qr.dbConn.ctx, plsql,
+	_, err = tx.ExecContext(txCtx, plsql,
 		timeout,       // :1 - используем переданный timeout
 		consumerParam, // :2
 		qr.queueName,  // :3
@@ -278,7 +294,7 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(timeout float64) (*QueueMess
 	checkSuccessSQL := `SELECT temp_queue_pkg.get_success(), temp_queue_pkg.get_error_code(), temp_queue_pkg.get_error_msg() FROM DUAL`
 	var successFlag, errorCode sql.NullInt64
 	var errorMsg sql.NullString
-	err = tx.QueryRowContext(qr.dbConn.ctx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
+	err = tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
@@ -308,7 +324,7 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(timeout float64) (*QueueMess
 	             XMLSerialize(DOCUMENT temp_queue_pkg.get_payload() AS CLOB) as payload 
 	          FROM DUAL`
 
-	rows, err := tx.QueryContext(qr.dbConn.ctx, query)
+	rows, err := tx.QueryContext(txCtx, query)
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			log.Printf("Ошибка отката транзакции: %v", rollbackErr)

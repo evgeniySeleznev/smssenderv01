@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -78,6 +79,10 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	log.Printf("Попытка извлечения сообщения из exception queue %s (timeout: %d сек)",
 		eqr.queueName, eqr.waitTimeout)
 
+	// Создаем контекст с таймаутом для создания пакета
+	packageCtx, packageCancel := context.WithTimeout(context.Background(), execTimeout)
+	defer packageCancel()
+
 	// Создаем пакет с переменными и функциями для доступа к ним
 	// Используем отдельный пакет для exception queue, чтобы не конфликтовать с обычной очередью
 	createPackageSQL := `
@@ -95,7 +100,7 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 			FUNCTION get_payload RETURN XMLType;
 		END temp_exception_queue_pkg;
 	`
-	_, err := eqr.dbConn.db.ExecContext(eqr.dbConn.ctx, createPackageSQL)
+	_, err := eqr.dbConn.db.ExecContext(packageCtx, createPackageSQL)
 	if err != nil {
 		log.Printf("Предупреждение: не удалось создать пакет (возможно, уже существует): %v", err)
 	}
@@ -129,7 +134,7 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 			END;
 		END temp_exception_queue_pkg;
 	`
-	_, err = eqr.dbConn.db.ExecContext(eqr.dbConn.ctx, createPackageBodySQL)
+	_, err = eqr.dbConn.db.ExecContext(packageCtx, createPackageBodySQL)
 	if err != nil {
 		log.Printf("Предупреждение: не удалось создать тело пакета (возможно, уже существует): %v", err)
 	}
@@ -180,15 +185,28 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 		END;
 	`
 
+	// Отмечаем начало операции с БД для предотвращения переподключения во время транзакции
+	eqr.dbConn.BeginOperation()
+	defer eqr.dbConn.EndOperation()
+
+	// Создаем контекст с таймаутом для транзакции
+	// Таймаут = waitTimeout + небольшой запас для выполнения операций
+	txTimeout := time.Duration(eqr.waitTimeout)*time.Second + 5*time.Second
+	if txTimeout > execTimeout {
+		txTimeout = execTimeout
+	}
+	txCtx, txCancel := context.WithTimeout(context.Background(), txTimeout)
+	defer txCancel()
+
 	// Выполняем операции в транзакции для обеспечения атомарности
-	tx, err := eqr.dbConn.db.BeginTx(eqr.dbConn.ctx, nil)
+	tx, err := eqr.dbConn.db.BeginTx(txCtx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка начала транзакции: %w", err)
 	}
 	defer tx.Rollback() // Откатываем, если что-то пойдет не так
 
 	// Выполняем PL/SQL блок для dequeue (без consumer_name)
-	_, err = tx.ExecContext(eqr.dbConn.ctx, plsql,
+	_, err = tx.ExecContext(txCtx, plsql,
 		eqr.waitTimeout, // :1
 		eqr.queueName,   // :2
 	)
@@ -213,7 +231,7 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	checkSuccessSQL := `SELECT temp_exception_queue_pkg.get_success(), temp_exception_queue_pkg.get_error_code(), temp_exception_queue_pkg.get_error_msg() FROM DUAL`
 	var successFlag, errorCode sql.NullInt64
 	var errorMsg sql.NullString
-	err = tx.QueryRowContext(eqr.dbConn.ctx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
+	err = tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
@@ -241,7 +259,7 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	             XMLSerialize(DOCUMENT temp_exception_queue_pkg.get_payload() AS CLOB) as payload 
 	          FROM DUAL`
 
-	rows, err := tx.QueryContext(eqr.dbConn.ctx, query)
+	rows, err := tx.QueryContext(txCtx, query)
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			log.Printf("Ошибка отката транзакции: %v", rollbackErr)

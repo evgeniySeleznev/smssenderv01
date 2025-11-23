@@ -7,10 +7,20 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/godror/godror"
 	"gopkg.in/ini.v1"
+)
+
+const (
+	// Таймауты для операций с БД
+	defaultDBTimeout  = 30 * time.Second // Таймаут по умолчанию для операций с БД
+	pingTimeout       = 5 * time.Second  // Таймаут для проверки соединения
+	queryTimeout      = 30 * time.Second // Таймаут для запросов
+	execTimeout       = 30 * time.Second // Таймаут для выполнения команд
+	connectionTimeout = 10 * time.Second // Таймаут для подключения
 )
 
 // DBConnection — аналог Python-класса, инкапсулирует соединение и операции с БД.
@@ -24,7 +34,8 @@ type DBConnection struct {
 	reconnectStop     chan struct{}
 	reconnectWg       sync.WaitGroup
 	lastReconnect     time.Time
-	reconnectInterval time.Duration // Интервал переподключения (300 секунд)
+	reconnectInterval time.Duration // Интервал переподключения (30 минут)
+	activeOps         atomic.Int32  // Счетчик активных операций с БД
 }
 
 // NewDBConnection загружает конфигурацию из settings/db_settings.ini.
@@ -46,7 +57,7 @@ func NewDBConnection() (*DBConnection, error) {
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		reconnectInterval: 300 * time.Second, // 300 секунд по умолчанию
+		reconnectInterval: 30 * time.Minute, // 30 минут по умолчанию
 		reconnectStop:     make(chan struct{}),
 		lastReconnect:     time.Now(),
 	}, nil
@@ -89,9 +100,31 @@ func (d *DBConnection) CheckConnection() bool {
 }
 
 // Reconnect переподключается к базе данных с пересозданием пула соединений
+// Проверяет наличие активных операций перед переподключением
+// Использует двойную проверку для предотвращения гонок
 func (d *DBConnection) Reconnect() error {
+	// Первая проверка: ждем завершения активных операций
+	if err := d.waitForActiveOperations(); err != nil {
+		return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
+	}
+
+	// Блокируем доступ к пулу для предотвращения новых операций
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Вторая проверка: еще раз проверяем активные операции после получения блокировки
+	// Это предотвращает гонку, когда операция началась между первой проверкой и блокировкой
+	activeCount := d.activeOps.Load()
+	if activeCount > 0 {
+		log.Printf("Обнаружены активные операции после получения блокировки (%d операций), ожидание...", activeCount)
+		// Освобождаем блокировку и ждем еще раз
+		d.mu.Unlock()
+		if err := d.waitForActiveOperations(); err != nil {
+			d.mu.Lock() // Восстанавливаем блокировку перед возвратом ошибки
+			return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
+		}
+		d.mu.Lock() // Получаем блокировку снова
+	}
 
 	log.Println("Начало переподключения к базе данных...")
 
@@ -109,6 +142,46 @@ func (d *DBConnection) Reconnect() error {
 
 	log.Printf("Переподключение к базе данных выполнено успешно. Пул соединений пересоздан.")
 	return nil
+}
+
+// waitForActiveOperations ждет завершения активных операций перед переподключением
+// Максимальное время ожидания - 60 секунд
+func (d *DBConnection) waitForActiveOperations() error {
+	const maxWaitTime = 60 * time.Second
+	const checkInterval = 100 * time.Millisecond
+
+	startTime := time.Now()
+	for {
+		activeCount := d.activeOps.Load()
+		if activeCount == 0 {
+			return nil // Нет активных операций, можно переподключаться
+		}
+
+		// Проверяем, не превышен ли максимальный срок ожидания
+		if time.Since(startTime) > maxWaitTime {
+			log.Printf("Предупреждение: превышено время ожидания завершения активных операций (%d активных операций)", activeCount)
+			// Продолжаем переподключение, но логируем предупреждение
+			return nil
+		}
+
+		log.Printf("Ожидание завершения активных операций перед переподключением (активных операций: %d)", activeCount)
+		time.Sleep(checkInterval)
+	}
+}
+
+// BeginOperation отмечает начало операции с БД (увеличивает счетчик активных операций)
+func (d *DBConnection) BeginOperation() {
+	d.activeOps.Add(1)
+}
+
+// EndOperation отмечает завершение операции с БД (уменьшает счетчик активных операций)
+func (d *DBConnection) EndOperation() {
+	d.activeOps.Add(-1)
+}
+
+// GetActiveOperationsCount возвращает количество активных операций
+func (d *DBConnection) GetActiveOperationsCount() int32 {
+	return d.activeOps.Load()
 }
 
 // RecreatePool пересоздает пул соединений (алиас для Reconnect для обратной совместимости)
@@ -138,14 +211,18 @@ func (d *DBConnection) openConnectionInternal() error {
 
 	// Настройки пула согласно требованиям:
 	// max=200, min=1 (по умолчанию), increment=10 (не поддерживается напрямую в sql.DB)
-	// max_lifetime_session=300 секунд
+	// max_lifetime_session синхронизирован с интервалом переподключения (30 минут)
+	// Используем немного меньше времени (25 минут), чтобы соединения обновлялись постепенно
+	// перед полным переподключением пула каждые 30 минут
 	db.SetMaxOpenConns(200)
-	db.SetMaxIdleConns(10)                   // Аналог increment
-	db.SetConnMaxLifetime(300 * time.Second) // 300 секунд = 5 минут
-	db.SetConnMaxIdleTime(300 * time.Second)
+	db.SetMaxIdleConns(10)                  // Аналог increment
+	db.SetConnMaxLifetime(25 * time.Minute) // 25 минут - соединения обновляются постепенно
+	db.SetConnMaxIdleTime(25 * time.Minute) // 25 минут для idle соединений
 
-	// Проверка соединения
-	if err := db.PingContext(d.ctx); err != nil {
+	// Проверка соединения с таймаутом
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), connectionTimeout)
+	defer pingCancel()
+	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
 		log.Printf("ошибка ping: %v", err)
 		return fmt.Errorf("ошибка ping: %w", err)
@@ -240,7 +317,11 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 	var testPhone string
 	query := "SELECT pcsystem.PKG_SMS.GET_TEST_PHONE() FROM DUAL"
 
-	err := d.db.QueryRowContext(d.ctx, query).Scan(&testPhone)
+	// Используем контекст с таймаутом для запроса
+	queryCtx, queryCancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer queryCancel()
+
+	err := d.db.QueryRowContext(queryCtx, query).Scan(&testPhone)
 	if err != nil {
 		log.Printf("Ошибка выполнения pcsystem.PKG_SMS.GET_TEST_PHONE(): %v", err)
 		return "", fmt.Errorf("ошибка получения тестового номера: %w", err)
