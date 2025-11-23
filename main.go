@@ -26,6 +26,9 @@ func main() {
 
 	log.Println("Успешно подключено к Oracle базе данных")
 
+	// Запускаем механизм периодического переподключения к БД (каждые 300 секунд)
+	dbConn.StartPeriodicReconnect()
+
 	// Загружаем конфигурацию SMS сервиса
 	smsConfig, err := sms.LoadConfig(dbConn.GetConfig())
 	if err != nil {
