@@ -35,8 +35,9 @@ type TestPhoneGetter func() (string, error)
 type Service struct {
 	cfg          *Config
 	mu           sync.RWMutex
-	lastActivity map[int]time.Time // Последняя активность по каждому SMPP провайдеру
-	getTestPhone TestPhoneGetter   // Функция для получения тестового номера (опционально)
+	lastActivity map[int]time.Time    // Последняя активность по каждому SMPP провайдеру
+	getTestPhone TestPhoneGetter      // Функция для получения тестового номера (опционально)
+	adapters     map[int]*SMPPAdapter // Кэш адаптеров по SMPP ID
 }
 
 // NewService создает новый сервис отправки SMS
@@ -45,6 +46,7 @@ func NewService(cfg *Config) *Service {
 		cfg:          cfg,
 		lastActivity: make(map[int]time.Time),
 		getTestPhone: nil, // По умолчанию не установлена
+		adapters:     make(map[int]*SMPPAdapter),
 	}
 }
 
@@ -161,20 +163,52 @@ func (s *Service) sendSMS(msg SMSMessage, smppCfg *SMPPConfig, phoneNumber strin
 		return messageID, nil
 	}
 
-	// Здесь будет реальная отправка через SMPP библиотеку
-	// Пока не реализовано, так как режим Silent включен по умолчанию
-	log.Printf("[REAL MODE] Отправка SMS через SMPP (пока не реализовано)")
+	// Реальная отправка через SMPP библиотеку
+	log.Printf("[REAL MODE] Отправка SMS через SMPP")
 	log.Printf("  TaskID: %d", msg.TaskID)
 	log.Printf("  Phone: +7%s", phoneNumber)
 	log.Printf("  Message: %s", msg.Message)
 	log.Printf("  Sender: %s", msg.SenderName)
 	log.Printf("  SMPP Host: %s:%d", smppCfg.Host, smppCfg.Port)
 
-	// TODO: Реальная отправка через SMPP библиотеку
-	// messageID, err := smppAdapter.SendSMS(phoneNumber, msg.Message, msg.SenderName)
-	// return messageID, err
+	// Получаем или создаем адаптер для данного SMPP провайдера
+	adapter, err := s.getOrCreateAdapter(msg.SMPPID, smppCfg)
+	if err != nil {
+		return "", fmt.Errorf("ошибка создания SMPP адаптера: %w", err)
+	}
 
-	return "", fmt.Errorf("реальная отправка SMS пока не реализована (используйте Silent mode)")
+	// Отправка SMS через адаптер
+	messageID, err := adapter.SendSMS(phoneNumber, msg.Message, msg.SenderName)
+	if err != nil {
+		return "", fmt.Errorf("ошибка отправки SMS: %w", err)
+	}
+
+	log.Printf("SMS отправлено: Sender: %s, Number: %s, Text: %s, MessageId: %s",
+		msg.SenderName, phoneNumber, msg.Message, messageID)
+
+	return messageID, nil
+}
+
+// getOrCreateAdapter получает существующий адаптер или создает новый для указанного SMPP ID
+func (s *Service) getOrCreateAdapter(smppID int, smppCfg *SMPPConfig) (*SMPPAdapter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Проверяем, существует ли уже адаптер
+	if adapter, ok := s.adapters[smppID]; ok {
+		return adapter, nil
+	}
+
+	// Создаем новый адаптер
+	adapter, err := NewSMPPAdapter(smppCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Сохраняем адаптер в кэше
+	s.adapters[smppID] = adapter
+
+	return adapter, nil
 }
 
 // checkSchedule проверяет, попадает ли время в рабочее расписание
