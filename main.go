@@ -126,18 +126,6 @@ func main() {
 
 	// Бесконечный цикл чтения из очереди (аналогично Python: while True)
 	for {
-		// Проверка соединения перед каждым чтением (аналогично Python: connection.ping())
-		if !dbConn.CheckConnection() {
-			log.Println("Ошибка соединения, переподключение...")
-			time.Sleep(5 * time.Second)
-			if err := dbConn.Reconnect(); err != nil {
-				log.Printf("Ошибка переподключения: %v", err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			log.Println("Переподключение выполнено успешно")
-		}
-
 		// Создаем новый канал для сигнала на каждой итерации
 		iterationSignalChan := make(chan struct{})
 

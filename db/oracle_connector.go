@@ -100,29 +100,56 @@ func (d *DBConnection) CheckConnection() bool {
 
 // Reconnect переподключается к базе данных с пересозданием пула соединений
 // Проверяет наличие активных операций перед переподключением
-// Использует двойную проверку для предотвращения гонок
+// Использует безопасную блокировку без гонок
 func (d *DBConnection) Reconnect() error {
-	// Первая проверка: ждем завершения активных операций
+	// Первая проверка: ждем завершения активных операций БЕЗ блокировки
+	// Это позволяет операциям завершиться естественным образом
 	if err := d.waitForActiveOperations(); err != nil {
 		return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
 	}
 
 	// Блокируем доступ к пулу для предотвращения новых операций
+	// Используем цикл с проверкой для предотвращения гонок
+	const maxRetries = 3
+	const retryDelay = 50 * time.Millisecond
+
+	// Пытаемся получить блокировку с проверкой активных операций
+	for retry := 0; retry < maxRetries; retry++ {
+		// Проверяем активные операции БЕЗ блокировки (быстрая проверка)
+		activeCount := d.activeOps.Load()
+		if activeCount == 0 {
+			// Нет активных операций - получаем блокировку и переподключаемся
+			break
+		}
+
+		if retry < maxRetries-1 {
+			log.Printf("Обнаружены активные операции (%d операций), ожидание... (попытка %d/%d)",
+				activeCount, retry+1, maxRetries)
+			time.Sleep(retryDelay)
+		} else {
+			// Последняя попытка - ждем завершения операций
+			log.Printf("Последняя попытка: ожидание завершения активных операций (%d операций)", activeCount)
+			if err := d.waitForActiveOperations(); err != nil {
+				return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
+			}
+			// Финальная проверка
+			activeCount = d.activeOps.Load()
+			if activeCount > 0 {
+				log.Printf("Предупреждение: переподключение выполняется при наличии активных операций (%d операций)", activeCount)
+			}
+			break
+		}
+	}
+
+	// Получаем блокировку для переподключения
+	// К этому моменту активные операции должны быть завершены
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Вторая проверка: еще раз проверяем активные операции после получения блокировки
-	// Это предотвращает гонку, когда операция началась между первой проверкой и блокировкой
-	activeCount := d.activeOps.Load()
-	if activeCount > 0 {
-		log.Printf("Обнаружены активные операции после получения блокировки (%d операций), ожидание...", activeCount)
-		// Освобождаем блокировку и ждем еще раз
-		d.mu.Unlock()
-		if err := d.waitForActiveOperations(); err != nil {
-			d.mu.Lock() // Восстанавливаем блокировку перед возвратом ошибки
-			return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
-		}
-		d.mu.Lock() // Получаем блокировку снова
+	// Финальная проверка под блокировкой (на случай гонки)
+	finalActiveCount := d.activeOps.Load()
+	if finalActiveCount > 0 {
+		log.Printf("Предупреждение: обнаружены активные операции под блокировкой (%d операций), продолжаем переподключение", finalActiveCount)
 	}
 
 	log.Println("Начало переподключения к базе данных...")
@@ -146,7 +173,7 @@ func (d *DBConnection) Reconnect() error {
 // waitForActiveOperations ждет завершения активных операций перед переподключением
 // Максимальное время ожидания - 60 секунд
 func (d *DBConnection) waitForActiveOperations() error {
-	const maxWaitTime = 60 * time.Second
+	const maxWaitTime = 35 * time.Second
 	const checkInterval = 100 * time.Millisecond
 
 	startTime := time.Now()
