@@ -245,17 +245,19 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 
 	// Проверяем, прошло ли достаточно времени с последнего ответа
 	if rebindIntervalMin == 0 {
-		rebindIntervalMin = 3 // По умолчанию 60 минут
+		rebindIntervalMin = 60 // По умолчанию 60 минут
 	}
 
 	timeSinceLastAnswer := time.Since(a.lastAnswerTime)
 	rebindInterval := time.Duration(rebindIntervalMin) * time.Minute
 
-	log.Printf("Rebind(): проверка - прошло %v с последнего ответа, требуется %v (lastAnswerTime: %v)",
-		timeSinceLastAnswer, rebindInterval, a.lastAnswerTime.Format("15:04:05"))
-
 	if timeSinceLastAnswer < rebindInterval {
 		// Еще не время для переподключения
+		// Логируем только если прошло более 80% интервала, чтобы не засорять логи
+		if timeSinceLastAnswer > rebindInterval*80/100 {
+			log.Printf("Rebind(): проверка - прошло %v с последнего ответа, требуется %v (осталось %v)",
+				timeSinceLastAnswer, rebindInterval, rebindInterval-timeSinceLastAnswer)
+		}
 		a.mu.Unlock()
 		return true
 	}
