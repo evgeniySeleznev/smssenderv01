@@ -171,12 +171,16 @@ func (d *DBConnection) Reconnect() error {
 }
 
 // waitForActiveOperations ждет завершения активных операций перед переподключением
-// Максимальное время ожидания - 60 секунд
+// Максимальное время ожидания - 35 секунд
 func (d *DBConnection) waitForActiveOperations() error {
 	const maxWaitTime = 35 * time.Second
 	const checkInterval = 100 * time.Millisecond
+	const logInterval = 1 * time.Second // Логируем не чаще раза в секунду
 
 	startTime := time.Now()
+	lastLogTime := time.Time{}
+	lastActiveCount := int32(-1)
+
 	for {
 		activeCount := d.activeOps.Load()
 		if activeCount == 0 {
@@ -190,7 +194,15 @@ func (d *DBConnection) waitForActiveOperations() error {
 			return nil
 		}
 
-		log.Printf("Ожидание завершения активных операций перед переподключением (активных операций: %d)", activeCount)
+		// Логируем только если прошло более 1 секунды с последнего логирования
+		// или изменилось количество активных операций
+		now := time.Now()
+		if now.Sub(lastLogTime) >= logInterval || activeCount != lastActiveCount {
+			log.Printf("Ожидание завершения активных операций перед переподключением (активных операций: %d)", activeCount)
+			lastLogTime = now
+			lastActiveCount = activeCount
+		}
+
 		time.Sleep(checkInterval)
 	}
 }
