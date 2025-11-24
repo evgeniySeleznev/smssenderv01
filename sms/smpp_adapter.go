@@ -80,7 +80,7 @@ func (a *SMPPAdapter) Bind() error {
 
 	// Если клиент существует, полностью закрываем его перед переподключением
 	if a.client != nil {
-		log.Printf("  Bind(): закрытие существующего клиента...")
+		log.Printf("  Bind(): закрытие существующего клиента, если он подключен...")
 		// Сохраняем ссылку на старый канал для проверки
 		oldStatusChan := a.statusChan
 		a.unbindInternal()
@@ -245,11 +245,14 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 
 	// Проверяем, прошло ли достаточно времени с последнего ответа
 	if rebindIntervalMin == 0 {
-		rebindIntervalMin = 60 // По умолчанию 60 минут
+		rebindIntervalMin = 3 // По умолчанию 60 минут
 	}
 
 	timeSinceLastAnswer := time.Since(a.lastAnswerTime)
 	rebindInterval := time.Duration(rebindIntervalMin) * time.Minute
+
+	log.Printf("Rebind(): проверка - прошло %v с последнего ответа, требуется %v (lastAnswerTime: %v)",
+		timeSinceLastAnswer, rebindInterval, a.lastAnswerTime.Format("15:04:05"))
 
 	if timeSinceLastAnswer < rebindInterval {
 		// Еще не время для переподключения

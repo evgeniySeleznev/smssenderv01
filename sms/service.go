@@ -118,7 +118,7 @@ func (s *Service) StartPeriodicRebind() {
 	// Используем RebindSMPPMin из конфига, по умолчанию 60 минут
 	rebindIntervalMin := s.cfg.Schedule.RebindSMPPMin
 	if rebindIntervalMin == 0 {
-		rebindIntervalMin = 60 // По умолчанию 60 минут
+		rebindIntervalMin = 3 // По умолчанию 60 минут
 	}
 
 	// Проверяем состояние соединения каждые 500 мс (как в C# проекте)
