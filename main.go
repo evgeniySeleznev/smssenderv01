@@ -120,6 +120,9 @@ func main() {
 			// Логируем результат
 			log.Printf("Результат отправки SMS: TaskID=%d, Status=%d, MessageID=%s, ErrorText=%s",
 				response.TaskID, response.Status, response.MessageID, response.ErrorText)
+
+			// Задержка между обработкой сообщений (аналогично C#: Thread.Sleep(20))
+			time.Sleep(20 * time.Millisecond)
 		}
 		log.Printf("Батч %d обработан", batchNum)
 	}

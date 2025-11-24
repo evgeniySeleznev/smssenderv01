@@ -59,9 +59,9 @@ func NewService(cfg *Config) *Service {
 // InitializeAdapters инициализирует все SMPP адаптеры и устанавливает соединения заранее
 func (s *Service) InitializeAdapters() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.initialized {
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -81,6 +81,8 @@ func (s *Service) InitializeAdapters() error {
 		s.adapters[smppID] = adapter
 
 		// Устанавливаем соединение заранее (только в реальном режиме)
+		// Разблокируем перед вызовом Bind, чтобы избежать deadlock
+		s.mu.Unlock()
 		if !s.cfg.Mode.Silent {
 			log.Printf("Предварительное подключение SMPP ID=%d...", smppID)
 			if err := adapter.Bind(); err != nil {
@@ -90,12 +92,14 @@ func (s *Service) InitializeAdapters() error {
 				log.Printf("SMPP адаптер ID=%d успешно подключен", smppID)
 			}
 		}
+		s.mu.Lock() // Блокируем обратно для следующей итерации или завершения
 	}
 
 	s.initialized = true
 	log.Println("Инициализация SMPP адаптеров завершена")
+	s.mu.Unlock() // Разблокируем перед вызовом StartPeriodicRebind, чтобы избежать deadlock
 
-	// Запускаем механизм периодического переподключения
+	// Запускаем механизм периодического переподключения (после разблокировки)
 	s.StartPeriodicRebind()
 
 	return nil
@@ -117,8 +121,8 @@ func (s *Service) StartPeriodicRebind() {
 		rebindIntervalMin = 60 // По умолчанию 60 минут
 	}
 
-	// Проверяем каждые 5 минут, нужно ли переподключаться
-	checkInterval := 5 * time.Minute
+	// Проверяем каждые 15 минут, нужно ли переподключаться
+	checkInterval := 15 * time.Minute
 	s.rebindTicker = time.NewTicker(checkInterval)
 	s.rebindWg.Add(1)
 

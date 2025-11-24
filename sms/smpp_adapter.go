@@ -54,9 +54,13 @@ func NewSMPPAdapter(cfg *SMPPConfig) (*SMPPAdapter, error) {
 func (a *SMPPAdapter) createClient() {
 	addr := fmt.Sprintf("%s:%d", a.config.Host, a.config.Port)
 
-	enquireLink := 10 * time.Second // По умолчанию
+	// EnquireLink по умолчанию отключен (0), как в C# проекте
+	// Если EnquireLinkInterval > 0, используем его значение в секундах
+	var enquireLink time.Duration
 	if a.config.EnquireLinkInterval > 0 {
 		enquireLink = time.Duration(a.config.EnquireLinkInterval) * time.Second
+	} else {
+		enquireLink = 0 // Отключено по умолчанию
 	}
 
 	a.client = &smpp.Transceiver{
