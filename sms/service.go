@@ -39,6 +39,9 @@ type Service struct {
 	getTestPhone TestPhoneGetter      // Функция для получения тестового номера (опционально)
 	adapters     map[int]*SMPPAdapter // Кэш адаптеров по SMPP ID
 	initialized  bool                 // Флаг инициализации адаптеров
+	rebindTicker *time.Ticker         // Таймер для периодического переподключения
+	rebindStop   chan struct{}        // Канал для остановки переподключения
+	rebindWg     sync.WaitGroup       // WaitGroup для ожидания завершения горутины переподключения
 }
 
 // NewService создает новый сервис отправки SMS
@@ -49,6 +52,7 @@ func NewService(cfg *Config) *Service {
 		getTestPhone: nil, // По умолчанию не установлена
 		adapters:     make(map[int]*SMPPAdapter),
 		initialized:  false,
+		rebindStop:   make(chan struct{}),
 	}
 }
 
@@ -62,20 +66,20 @@ func (s *Service) InitializeAdapters() error {
 	}
 
 	log.Println("Инициализация SMPP адаптеров...")
-	
+
 	// Создаем адаптеры для всех настроенных SMPP провайдеров
 	for smppID, smppCfg := range s.cfg.SMPP {
-		log.Printf("Инициализация SMPP адаптера ID=%d (Host=%s:%d, User=%s)", 
+		log.Printf("Инициализация SMPP адаптера ID=%d (Host=%s:%d, User=%s)",
 			smppID, smppCfg.Host, smppCfg.Port, smppCfg.User)
-		
+
 		adapter, err := NewSMPPAdapter(smppCfg)
 		if err != nil {
 			log.Printf("Ошибка создания адаптера для SMPP ID=%d: %v", smppID, err)
 			continue
 		}
-		
+
 		s.adapters[smppID] = adapter
-		
+
 		// Устанавливаем соединение заранее (только в реальном режиме)
 		if !s.cfg.Mode.Silent {
 			log.Printf("Предварительное подключение SMPP ID=%d...", smppID)
@@ -87,10 +91,89 @@ func (s *Service) InitializeAdapters() error {
 			}
 		}
 	}
-	
+
 	s.initialized = true
 	log.Println("Инициализация SMPP адаптеров завершена")
+
+	// Запускаем механизм периодического переподключения
+	s.StartPeriodicRebind()
+
 	return nil
+}
+
+// StartPeriodicRebind запускает горутину для периодического переподключения SMPP адаптеров
+func (s *Service) StartPeriodicRebind() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Если уже запущено, не запускаем повторно
+	if s.rebindTicker != nil {
+		return
+	}
+
+	// Используем RebindSMPPMin из конфига, по умолчанию 60 минут
+	rebindIntervalMin := s.cfg.Schedule.RebindSMPPMin
+	if rebindIntervalMin == 0 {
+		rebindIntervalMin = 60 // По умолчанию 60 минут
+	}
+
+	// Проверяем каждые 5 минут, нужно ли переподключаться
+	checkInterval := 5 * time.Minute
+	s.rebindTicker = time.NewTicker(checkInterval)
+	s.rebindWg.Add(1)
+
+	log.Printf("Запущен механизм периодического переподключения SMPP (проверка каждые %v, переподключение через %d минут)",
+		checkInterval, rebindIntervalMin)
+
+	go func() {
+		defer s.rebindWg.Done()
+		defer s.rebindTicker.Stop()
+
+		for {
+			select {
+			case <-s.rebindTicker.C:
+				// Время проверки - проверяем все адаптеры
+				s.mu.RLock()
+				adaptersCopy := make(map[int]*SMPPAdapter)
+				for id, adapter := range s.adapters {
+					adaptersCopy[id] = adapter
+				}
+				rebindIntervalMin := s.cfg.Schedule.RebindSMPPMin
+				if rebindIntervalMin == 0 {
+					rebindIntervalMin = 60
+				}
+				s.mu.RUnlock()
+
+				// Проверяем и переподключаем каждый адаптер
+				for smppID, adapter := range adaptersCopy {
+					if adapter != nil {
+						if !adapter.Rebind(rebindIntervalMin) {
+							log.Printf("Предупреждение: не удалось выполнить Rebind для SMPP ID=%d", smppID)
+						}
+					}
+				}
+
+			case <-s.rebindStop:
+				log.Println("Остановка механизма периодического переподключения SMPP")
+				return
+			}
+		}
+	}()
+}
+
+// StopPeriodicRebind останавливает механизм периодического переподключения
+func (s *Service) StopPeriodicRebind() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.rebindTicker != nil {
+		close(s.rebindStop)
+		s.rebindTicker.Stop()
+		s.rebindTicker = nil
+		s.rebindWg.Wait()
+		// Создаем новый канал для следующего запуска
+		s.rebindStop = make(chan struct{})
+	}
 }
 
 // SetTestPhoneGetter устанавливает функцию для получения тестового номера

@@ -264,6 +264,8 @@ func main() {
 			exitMu.Unlock()
 			log.Println("Ожидание завершения всех обработчиков сообщений...")
 			allHandlersWg.Wait()
+			log.Println("Остановка механизма периодического переподключения SMPP...")
+			smsService.StopPeriodicRebind()
 			log.Println("Все обработчики завершены, выход из приложения")
 			return
 		}

@@ -72,13 +72,9 @@ func (a *SMPPAdapter) Bind() error {
 	a.mu.Lock()
 	log.Printf("Bind(): подключение к %s:%d, User: %s", a.config.Host, a.config.Port, a.config.User)
 
-	// Если клиент существует, закрываем его
-	if a.client != nil {
-		if a.isConnected {
-			log.Printf("  Unbind(): сброс существующего подключения")
-		} else {
-			log.Printf("  Close(): закрытие существующего клиента")
-		}
+	// Если клиент существует и уже подключен, закрываем соединение перед переподключением
+	if a.client != nil && a.isConnected {
+		log.Printf("  Unbind(): сброс существующего подключения")
 		a.unbindInternal()
 		a.isConnected = false
 		// Даем время на закрытие соединения
@@ -87,9 +83,11 @@ func (a *SMPPAdapter) Bind() error {
 		a.mu.Lock()
 	}
 
-	// Пересоздаем клиент для нового подключения
-	log.Printf("  Bind(): создание нового клиента...")
-	a.createClient()
+	// Если клиент не существует, создаем его
+	if a.client == nil {
+		log.Printf("  Bind(): создание нового клиента...")
+		a.createClient()
+	}
 
 	// Выполняем Bind и получаем канал статуса
 	log.Printf("  Bind(): вызов client.Bind()...")
@@ -178,6 +176,56 @@ func (a *SMPPAdapter) IsConnected() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.isConnected && a.client != nil
+}
+
+// Rebind выполняет периодическое переподключение, если прошло более указанного времени
+// с момента последнего ответа от сервера
+func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
+	// Проверяем условия под блокировкой
+	a.mu.Lock()
+
+	// Если клиент не существует, нечего переподключать
+	if a.client == nil {
+		a.mu.Unlock()
+		return true
+	}
+
+	// Проверяем, прошло ли достаточно времени с последнего ответа
+	if rebindIntervalMin == 0 {
+		rebindIntervalMin = 60 // По умолчанию 60 минут
+	}
+
+	timeSinceLastAnswer := time.Since(a.lastAnswerTime)
+	rebindInterval := time.Duration(rebindIntervalMin) * time.Minute
+
+	if timeSinceLastAnswer < rebindInterval {
+		// Еще не время для переподключения
+		a.mu.Unlock()
+		return true
+	}
+
+	log.Printf("Rebind(): прошло %v с последнего ответа (интервал: %v), выполняется переподключение",
+		timeSinceLastAnswer, rebindInterval)
+
+	a.mu.Unlock() // Разблокируем перед вызовом Bind, чтобы избежать deadlock
+
+	// Выполняем переподключение (Bind сам заблокирует мьютекс)
+	err := a.Bind()
+
+	if err != nil {
+		log.Printf("Rebind(): ошибка переподключения: %v", err)
+		return false
+	}
+
+	log.Printf("Rebind(): успешно переподключен")
+	return true
+}
+
+// GetLastAnswerTime возвращает время последнего ответа (для тестирования)
+func (a *SMPPAdapter) GetLastAnswerTime() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastAnswerTime
 }
 
 // SendSMS отправляет SMS через SMPP протокол
