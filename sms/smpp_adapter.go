@@ -25,12 +25,14 @@ const (
 
 // SMPPAdapter представляет адаптер для работы с SMPP протоколом
 type SMPPAdapter struct {
-	client         *smpp.Transceiver
-	config         *SMPPConfig
-	mu             sync.Mutex
-	lastAnswerTime time.Time
-	statusChan     <-chan smpp.ConnStatus
-	isConnected    bool // Флаг подключения
+	client              *smpp.Transceiver
+	config              *SMPPConfig
+	mu                  sync.Mutex
+	lastAnswerTime      time.Time
+	statusChan          <-chan smpp.ConnStatus
+	isConnected         bool      // Флаг подключения
+	lastBindAttempt     time.Time // Время последней попытки Bind
+	consecutiveFailures int       // Количество последовательных неудачных попыток
 }
 
 // NewSMPPAdapter создает новый SMPP адаптер
@@ -76,22 +78,57 @@ func (a *SMPPAdapter) Bind() error {
 	a.mu.Lock()
 	log.Printf("Bind(): подключение к %s:%d, User: %s", a.config.Host, a.config.Port, a.config.User)
 
-	// Если клиент существует и уже подключен, закрываем соединение перед переподключением
-	if a.client != nil && a.isConnected {
-		log.Printf("  Unbind(): сброс существующего подключения")
+	// Если клиент существует, полностью закрываем его перед переподключением
+	if a.client != nil {
+		log.Printf("  Bind(): закрытие существующего клиента...")
+		// Сохраняем ссылку на старый канал для проверки
+		oldStatusChan := a.statusChan
 		a.unbindInternal()
 		a.isConnected = false
-		// Даем время на закрытие соединения
+		a.statusChan = nil // Очищаем ссылку на канал
 		a.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
+
+		// Даем время на закрытие соединения и завершение горутины
+		// Если старая горутина еще работает, она завершится когда канал закроется
+		log.Printf("  Bind(): ожидание закрытия старого соединения...")
+		time.Sleep(500 * time.Millisecond)
+
+		// Проверяем, закрыт ли старый канал (неблокирующая проверка)
+		if oldStatusChan != nil {
+			select {
+			case _, ok := <-oldStatusChan:
+				if !ok {
+					log.Printf("  Bind(): старый канал статуса закрыт")
+				}
+			default:
+				// Канал еще открыт, но это нормально - он закроется при закрытии клиента
+				log.Printf("  Bind(): старый канал еще открыт, продолжаем...")
+			}
+		}
+
+		// Дополнительное время для полной очистки
+		time.Sleep(300 * time.Millisecond)
 		a.mu.Lock()
 	}
 
-	// Если клиент не существует, создаем его
-	if a.client == nil {
-		log.Printf("  Bind(): создание нового клиента...")
-		a.createClient()
+	// Применяем экспоненциальную задержку при повторных неудачных попытках
+	// чтобы не перегружать сервер слишком частыми запросами
+	timeSinceLastAttempt := time.Since(a.lastBindAttempt)
+	if a.consecutiveFailures > 0 && timeSinceLastAttempt < time.Duration(a.consecutiveFailures)*time.Second {
+		delay := time.Duration(a.consecutiveFailures) * time.Second
+		if delay > 30*time.Second {
+			delay = 30 * time.Second // Максимальная задержка 30 секунд
+		}
+		log.Printf("  Bind(): задержка перед повторной попыткой: %v (неудачных попыток подряд: %d)", delay, a.consecutiveFailures)
+		a.mu.Unlock()
+		time.Sleep(delay - timeSinceLastAttempt)
+		a.mu.Lock()
 	}
+	a.lastBindAttempt = time.Now()
+
+	// Всегда создаем новый клиент при переподключении
+	log.Printf("  Bind(): создание нового клиента...")
+	a.createClient()
 
 	// Выполняем Bind и получаем канал статуса
 	log.Printf("  Bind(): вызов client.Bind()...")
@@ -104,6 +141,9 @@ func (a *SMPPAdapter) Bind() error {
 	case status, ok := <-a.statusChan:
 		if !ok {
 			log.Printf("  Bind(): канал статуса закрыт до получения статуса")
+			a.mu.Lock()
+			a.consecutiveFailures++
+			a.mu.Unlock()
 			return fmt.Errorf("канал статуса закрыт")
 		}
 		log.Printf("  Bind(): получен первый статус: %v, ошибка: %v", status.Status(), status.Error())
@@ -113,6 +153,11 @@ func (a *SMPPAdapter) Bind() error {
 			err := status.Error()
 			if err != nil {
 				log.Printf("  Bind(): ошибка подключения: %v", err)
+			}
+			a.mu.Lock()
+			a.consecutiveFailures++
+			a.mu.Unlock()
+			if err != nil {
 				return fmt.Errorf("не удалось подключиться: %w", err)
 			}
 			return fmt.Errorf("не удалось подключиться: статус %v", status.Status())
@@ -122,6 +167,7 @@ func (a *SMPPAdapter) Bind() error {
 		a.mu.Lock()
 		a.isConnected = true
 		a.lastAnswerTime = time.Now()
+		a.consecutiveFailures = 0 // Сбрасываем счетчик неудач при успешном подключении
 		a.mu.Unlock()
 
 		// Запускаем горутину для отслеживания последующих изменений статуса
@@ -149,6 +195,9 @@ func (a *SMPPAdapter) Bind() error {
 		return nil
 	case <-time.After(30 * time.Second):
 		log.Printf("  Bind(): таймаут подключения (30 секунд) - статус не получен")
+		a.mu.Lock()
+		a.consecutiveFailures++
+		a.mu.Unlock()
 		return fmt.Errorf("таймаут подключения")
 	}
 }

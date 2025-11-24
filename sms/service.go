@@ -143,13 +143,10 @@ func (s *Service) StartPeriodicRebind() {
 				for id, adapter := range s.adapters {
 					adaptersCopy[id] = adapter
 				}
-				rebindIntervalMin := s.cfg.Schedule.RebindSMPPMin
-				if rebindIntervalMin == 0 {
-					rebindIntervalMin = 60
-				}
 				s.mu.RUnlock()
 
 				// Проверяем и переподключаем каждый адаптер
+				// Используем rebindIntervalMin из замыкания (вычислено один раз при запуске)
 				for smppID, adapter := range adaptersCopy {
 					if adapter != nil {
 						// Сначала проверяем реальное состояние соединения
