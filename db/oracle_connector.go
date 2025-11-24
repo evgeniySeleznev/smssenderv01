@@ -16,7 +16,6 @@ import (
 
 const (
 	// Таймауты для операций с БД
-	defaultDBTimeout  = 30 * time.Second // Таймаут по умолчанию для операций с БД
 	pingTimeout       = 5 * time.Second  // Таймаут для проверки соединения
 	queryTimeout      = 30 * time.Second // Таймаут для запросов
 	execTimeout       = 30 * time.Second // Таймаут для выполнения команд
@@ -90,7 +89,7 @@ func (d *DBConnection) CheckConnection() bool {
 	if d.db == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 	if err := d.db.PingContext(ctx); err != nil {
 		log.Printf("Ошибка проверки соединения: %v", err)
@@ -215,9 +214,9 @@ func (d *DBConnection) openConnectionInternal() error {
 	// Используем немного меньше времени (25 минут), чтобы соединения обновлялись постепенно
 	// перед полным переподключением пула каждые 30 минут
 	db.SetMaxOpenConns(200)
-	db.SetMaxIdleConns(10)                  // Аналог increment
-	db.SetConnMaxLifetime(25 * time.Minute) // 25 минут - соединения обновляются постепенно
-	db.SetConnMaxIdleTime(25 * time.Minute) // 25 минут для idle соединений
+	db.SetMaxIdleConns(10)                 // Аналог increment
+	db.SetConnMaxLifetime(5 * time.Minute) // 5 минут - соединения обновляются постепенно
+	db.SetConnMaxIdleTime(5 * time.Minute) // 5 минут для idle соединений
 
 	// Проверка соединения с таймаутом
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), connectionTimeout)
