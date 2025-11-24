@@ -33,6 +33,7 @@ type SMPPAdapter struct {
 	isConnected         bool      // Флаг подключения
 	lastBindAttempt     time.Time // Время последней попытки Bind
 	consecutiveFailures int       // Количество последовательных неудачных попыток
+	lastRebindLogTime   time.Time // Время последнего логирования перед rebind
 }
 
 // NewSMPPAdapter создает новый SMPP адаптер
@@ -253,10 +254,14 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 
 	if timeSinceLastAnswer < rebindInterval {
 		// Еще не время для переподключения
-		// Логируем только если прошло более 80% интервала, чтобы не засорять логи
+		// Логируем только если прошло более 80% интервала и прошло более 5 секунд с последнего логирования
 		if timeSinceLastAnswer > rebindInterval*80/100 {
-			log.Printf("Rebind(): проверка - прошло %v с последнего ответа, требуется %v (осталось %v)",
-				timeSinceLastAnswer, rebindInterval, rebindInterval-timeSinceLastAnswer)
+			timeSinceLastLog := time.Since(a.lastRebindLogTime)
+			if timeSinceLastLog >= 5*time.Second {
+				log.Printf("Rebind(): проверка - прошло %v с последнего ответа, требуется %v (осталось %v)",
+					timeSinceLastAnswer, rebindInterval, rebindInterval-timeSinceLastAnswer)
+				a.lastRebindLogTime = time.Now()
+			}
 		}
 		a.mu.Unlock()
 		return true
