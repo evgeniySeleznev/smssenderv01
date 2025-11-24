@@ -16,7 +16,6 @@ type SMPPConfig struct {
 	User                string
 	Password            string
 	EnquireLinkInterval int
-	ReBindInterval      int
 	DestTon             *int
 	DestNpi             *int
 	SourceTon           *int
@@ -70,7 +69,6 @@ func LoadConfig(cfg *ini.File) (*Config, error) {
 			User:                section.Key("User").String(),
 			Password:            section.Key("Password").String(),
 			EnquireLinkInterval: section.Key("EnquireLinkInterval").MustInt(0),
-			ReBindInterval:      section.Key("ReBindInterval").MustInt(0),
 		}
 
 		// Опциональные параметры

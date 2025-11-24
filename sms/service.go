@@ -121,8 +121,9 @@ func (s *Service) StartPeriodicRebind() {
 		rebindIntervalMin = 60 // По умолчанию 60 минут
 	}
 
-	// Проверяем каждые 15 минут, нужно ли переподключаться
-	checkInterval := 15 * time.Minute
+	// Проверяем состояние соединения каждые 500 мс (как в C# проекте)
+	// Это позволяет быстро обнаруживать разрывы соединения даже когда нет SMS для отправки
+	checkInterval := 500 * time.Millisecond
 	s.rebindTicker = time.NewTicker(checkInterval)
 	s.rebindWg.Add(1)
 
@@ -151,8 +152,18 @@ func (s *Service) StartPeriodicRebind() {
 				// Проверяем и переподключаем каждый адаптер
 				for smppID, adapter := range adaptersCopy {
 					if adapter != nil {
-						if !adapter.Rebind(rebindIntervalMin) {
-							log.Printf("Предупреждение: не удалось выполнить Rebind для SMPP ID=%d", smppID)
+						// Сначала проверяем реальное состояние соединения
+						// Если соединение разорвано, переподключаемся сразу
+						if !adapter.IsConnected() {
+							log.Printf("Обнаружено разорванное соединение для SMPP ID=%d, выполняется переподключение", smppID)
+							if err := adapter.Bind(); err != nil {
+								log.Printf("Ошибка переподключения для SMPP ID=%d: %v", smppID, err)
+							}
+						} else {
+							// Соединение активно - проверяем время с последнего ответа для периодического Rebind
+							if !adapter.Rebind(rebindIntervalMin) {
+								log.Printf("Предупреждение: не удалось выполнить Rebind для SMPP ID=%d", smppID)
+							}
 						}
 					}
 				}
