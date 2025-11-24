@@ -38,6 +38,7 @@ type Service struct {
 	lastActivity map[int]time.Time    // Последняя активность по каждому SMPP провайдеру
 	getTestPhone TestPhoneGetter      // Функция для получения тестового номера (опционально)
 	adapters     map[int]*SMPPAdapter // Кэш адаптеров по SMPP ID
+	initialized  bool                 // Флаг инициализации адаптеров
 }
 
 // NewService создает новый сервис отправки SMS
@@ -47,7 +48,49 @@ func NewService(cfg *Config) *Service {
 		lastActivity: make(map[int]time.Time),
 		getTestPhone: nil, // По умолчанию не установлена
 		adapters:     make(map[int]*SMPPAdapter),
+		initialized:  false,
 	}
+}
+
+// InitializeAdapters инициализирует все SMPP адаптеры и устанавливает соединения заранее
+func (s *Service) InitializeAdapters() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.initialized {
+		return nil
+	}
+
+	log.Println("Инициализация SMPP адаптеров...")
+	
+	// Создаем адаптеры для всех настроенных SMPP провайдеров
+	for smppID, smppCfg := range s.cfg.SMPP {
+		log.Printf("Инициализация SMPP адаптера ID=%d (Host=%s:%d, User=%s)", 
+			smppID, smppCfg.Host, smppCfg.Port, smppCfg.User)
+		
+		adapter, err := NewSMPPAdapter(smppCfg)
+		if err != nil {
+			log.Printf("Ошибка создания адаптера для SMPP ID=%d: %v", smppID, err)
+			continue
+		}
+		
+		s.adapters[smppID] = adapter
+		
+		// Устанавливаем соединение заранее (только в реальном режиме)
+		if !s.cfg.Mode.Silent {
+			log.Printf("Предварительное подключение SMPP ID=%d...", smppID)
+			if err := adapter.Bind(); err != nil {
+				log.Printf("Предупреждение: не удалось подключиться к SMPP ID=%d: %v (будет попытка при первой отправке)", smppID, err)
+				// Не возвращаем ошибку - соединение установится при первой отправке
+			} else {
+				log.Printf("SMPP адаптер ID=%d успешно подключен", smppID)
+			}
+		}
+	}
+	
+	s.initialized = true
+	log.Println("Инициализация SMPP адаптеров завершена")
+	return nil
 }
 
 // SetTestPhoneGetter устанавливает функцию для получения тестового номера
@@ -191,23 +234,30 @@ func (s *Service) sendSMS(msg SMSMessage, smppCfg *SMPPConfig, phoneNumber strin
 
 // getOrCreateAdapter получает существующий адаптер или создает новый для указанного SMPP ID
 func (s *Service) getOrCreateAdapter(smppID int, smppCfg *SMPPConfig) (*SMPPAdapter, error) {
+	s.mu.RLock()
+	adapter, ok := s.adapters[smppID]
+	s.mu.RUnlock()
+
+	if ok {
+		return adapter, nil
+	}
+
+	// Адаптер не найден - создаем новый (это не должно происходить после инициализации)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Проверяем, существует ли уже адаптер
+	// Двойная проверка на случай параллельного доступа
 	if adapter, ok := s.adapters[smppID]; ok {
 		return adapter, nil
 	}
 
-	// Создаем новый адаптер
+	log.Printf("Создание нового адаптера для SMPP ID=%d (не был инициализирован заранее)", smppID)
 	adapter, err := NewSMPPAdapter(smppCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// Сохраняем адаптер в кэше
 	s.adapters[smppID] = adapter
-
 	return adapter, nil
 }
 

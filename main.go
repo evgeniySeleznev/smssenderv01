@@ -42,6 +42,12 @@ func main() {
 	// Устанавливаем функцию получения тестового номера для режима Debug
 	smsService.SetTestPhoneGetter(dbConn.GetTestPhone)
 
+	// Инициализируем SMPP адаптеры заранее (подключаемся ко всем провайдерам)
+	if err := smsService.InitializeAdapters(); err != nil {
+		log.Printf("Предупреждение: ошибка инициализации адаптеров: %v", err)
+		log.Println("Адаптеры будут инициализированы при первой отправке SMS")
+	}
+
 	// Создаем QueueReader
 	queueReader, err := db.NewQueueReader(dbConn)
 	if err != nil {
