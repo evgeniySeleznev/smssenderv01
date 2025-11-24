@@ -338,25 +338,99 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 		return "", fmt.Errorf("соединение с БД недоступно")
 	}
 
-	// Вызываем функцию Oracle: pcsystem.PKG_SMS.GET_TEST_PHONE()
-	// Функция возвращает VARCHAR2(500) - тестовый номер телефона
-	var testPhone string
-	query := "SELECT pcsystem.PKG_SMS.GET_TEST_PHONE() FROM DUAL"
+	// Отмечаем начало операции с БД для предотвращения переподключения во время транзакции
+	d.BeginOperation()
+	defer d.EndOperation()
 
-	// Используем контекст с таймаутом для запроса
+	// Создаем контекст с таймаутом для транзакции
 	queryCtx, queryCancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer queryCancel()
 
-	err := d.db.QueryRowContext(queryCtx, query).Scan(&testPhone)
+	// Создаем временный пакет для хранения результата функции
+	// Аналогично queue_reader.go - Oracle требует использования пакетных переменных
+	if err := d.ensureTestPhonePackageExists(queryCtx); err != nil {
+		return "", fmt.Errorf("ошибка создания пакета: %w", err)
+	}
+
+	// Выполняем операции в транзакции для обеспечения атомарности
+	tx, err := d.db.BeginTx(queryCtx, nil)
 	if err != nil {
-		log.Printf("Ошибка выполнения pcsystem.PKG_SMS.GET_TEST_PHONE(): %v", err)
+		return "", fmt.Errorf("ошибка начала транзакции: %w", err)
+	}
+	defer tx.Rollback() // Откатываем, если что-то пойдет не так
+
+	// Используем PL/SQL блок для вызова функции Oracle и сохранения результата в пакетную переменную
+	// Аналогично queue_reader.go - Oracle требует использования PL/SQL блоков
+	plsql := `
+		BEGIN
+			temp_test_phone_pkg.g_phone_number := pcsystem.PKG_SMS.GET_TEST_PHONE();
+		END;
+	`
+
+	// Выполняем PL/SQL блок
+	_, err = tx.ExecContext(queryCtx, plsql)
+	if err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
+		log.Printf("Ошибка выполнения PL/SQL для pcsystem.PKG_SMS.GET_TEST_PHONE(): %v", err)
+		return "", fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
+	}
+
+	// Получаем результат через функцию-геттер пакета (аналогично queue_reader.go)
+	query := "SELECT temp_test_phone_pkg.get_phone_number() FROM DUAL"
+	var testPhone sql.NullString
+	err = tx.QueryRowContext(queryCtx, query).Scan(&testPhone)
+	if err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		}
+		log.Printf("Ошибка выполнения SELECT для temp_test_phone_pkg.get_phone_number(): %v", err)
 		return "", fmt.Errorf("ошибка получения тестового номера: %w", err)
 	}
 
-	if testPhone == "" {
+	// Коммитим транзакцию
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("ошибка коммита транзакции: %w", err)
+	}
+
+	if !testPhone.Valid || testPhone.String == "" {
 		return "", fmt.Errorf("ошибка получения тестового номера: номер пуст")
 	}
 
-	log.Printf("pcsystem.PKG_SMS.GET_TEST_PHONE() result: L_PHONE_NUMBER = %s", testPhone)
-	return testPhone, nil
+	log.Printf("pcsystem.PKG_SMS.GET_TEST_PHONE() result: L_PHONE_NUMBER = %s", testPhone.String)
+	return testPhone.String, nil
+}
+
+// ensureTestPhonePackageExists создает временный пакет Oracle для работы с функцией GET_TEST_PHONE
+// Аналогично queue_reader.go - Oracle требует использования пакетных переменных для передачи данных
+func (d *DBConnection) ensureTestPhonePackageExists(ctx context.Context) error {
+	// Создаем пакет с переменной и функцией-геттером для доступа к результату
+	createPackageSQL := `
+		CREATE OR REPLACE PACKAGE temp_test_phone_pkg AS
+			g_phone_number VARCHAR2(500);
+			
+			FUNCTION get_phone_number RETURN VARCHAR2;
+		END temp_test_phone_pkg;
+	`
+	_, err := d.db.ExecContext(ctx, createPackageSQL)
+	if err != nil {
+		return fmt.Errorf("не удалось создать пакет temp_test_phone_pkg: %w", err)
+	}
+
+	// Создаем тело пакета с реализацией функции-геттера
+	createPackageBodySQL := `
+		CREATE OR REPLACE PACKAGE BODY temp_test_phone_pkg AS
+			FUNCTION get_phone_number RETURN VARCHAR2 IS
+			BEGIN
+				RETURN g_phone_number;
+			END;
+		END temp_test_phone_pkg;
+	`
+	_, err = d.db.ExecContext(ctx, createPackageBodySQL)
+	if err != nil {
+		return fmt.Errorf("не удалось создать тело пакета temp_test_phone_pkg: %w", err)
+	}
+
+	return nil
 }
