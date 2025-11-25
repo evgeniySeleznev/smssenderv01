@@ -269,6 +269,10 @@ func main() {
 			allHandlersWg.Wait()
 			log.Println("Остановка механизма периодического переподключения SMPP...")
 			smsService.StopPeriodicRebind()
+			log.Println("Закрытие SMPP адаптеров...")
+			if err := smsService.Close(); err != nil {
+				log.Printf("Ошибка при закрытии SMPP адаптеров: %v", err)
+			}
 			log.Println("Все обработчики завершены, выход из приложения")
 			return
 		}

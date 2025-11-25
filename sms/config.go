@@ -51,8 +51,8 @@ func LoadConfig(cfg *ini.File) (*Config, error) {
 		SMPP: make(map[int]*SMPPConfig),
 	}
 
-	// Парсинг секций SMPP, SMPP1, SMPP2, SMPP3, SMPP4
-	for i := 0; i < 5; i++ {
+	// Парсинг секций SMPP, SMPP1, SMPP2 (для 3443 TLS порта или smpp22.smsc.ru для резерва)
+	for i := 0; i < 3; i++ {
 		sectionName := "SMPP"
 		if i > 0 {
 			sectionName = fmt.Sprintf("SMPP%d", i)

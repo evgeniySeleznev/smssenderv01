@@ -349,7 +349,6 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 
 		// Отправка SMS с автоматической сегментацией для длинных сообщений
 		// Используем SubmitLongMsg для автоматического разбиения длинных сообщений
-		// (аналогично UseSmppSegmentation из руководства)
 		parts, err := a.client.SubmitLongMsg(req)
 		if err != nil {
 			// Проверяем, является ли ошибка ошибкой соединения

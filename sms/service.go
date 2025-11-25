@@ -188,6 +188,28 @@ func (s *Service) StopPeriodicRebind() {
 	}
 }
 
+// Close закрывает все SMPP адаптеры и освобождает ресурсы
+// Перед вызовом Close() рекомендуется вызвать StopPeriodicRebind() для остановки механизма переподключения
+func (s *Service) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Закрываем все адаптеры
+	var lastErr error
+	for id, adapter := range s.adapters {
+		if adapter != nil {
+			if err := adapter.Close(); err != nil {
+				log.Printf("Ошибка закрытия SMPP адаптера ID=%d: %v", id, err)
+				lastErr = err
+			} else {
+				log.Printf("SMPP адаптер ID=%d закрыт", id)
+			}
+		}
+	}
+
+	return lastErr
+}
+
 // SetTestPhoneGetter устанавливает функцию для получения тестового номера
 func (s *Service) SetTestPhoneGetter(getter TestPhoneGetter) {
 	s.mu.Lock()
