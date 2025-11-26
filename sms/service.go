@@ -273,8 +273,6 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 				}, nil
 			}
 
-			// Если тестовый номер пуст (например, значение отсутствует в БД),
-			// считаем, что отправлять SMS некуда и просто фиксируем событие в логах.
 			if strings.TrimSpace(testNumber) == "" {
 				errText := "Режим Debug: тестовый номер отсутствует, SMS не отправляется"
 				log.Printf("%s", errText)

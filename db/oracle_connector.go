@@ -406,7 +406,11 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 		return "", fmt.Errorf("ошибка коммита транзакции: %w", err)
 	}
 
+	// Если тестовый номер пуст (например, значение отсутствует в БД),
+	// считаем, что отправлять SMS некуда и просто фиксируем событие в логах.
 	if !testPhone.Valid || testPhone.String == "" {
+		errText := "Режим Debug: тестовый номер отсутствует, SMS не отправляется"
+		log.Printf("%s", errText)
 		return "", fmt.Errorf("ошибка получения тестового номера: номер пуст")
 	}
 
