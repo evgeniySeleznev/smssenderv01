@@ -374,7 +374,7 @@ func (s *Service) EnsureSMPPConnectivity() bool {
 	s.mu.RUnlock()
 
 	if len(adaptersCopy) == 0 {
-		log.Println("EnsureSMPPConnectivity: нет инициализированных SMPP адаптеров")
+		log.Println("Проверка подключения к SMPP: нет инициализированных SMPP адаптеров")
 		return false
 	}
 
@@ -386,16 +386,16 @@ func (s *Service) EnsureSMPPConnectivity() bool {
 			return true
 		}
 
-		log.Printf("EnsureSMPPConnectivity: SMPP ID=%d не подключен, попытка Bind...", smppID)
+		log.Printf("Проверка подключения к SMPP: SMPP ID=%d не подключен, попытка Bind...", smppID)
 		if err := adapter.Bind(); err != nil {
-			log.Printf("EnsureSMPPConnectivity: не удалось подключиться к SMPP ID=%d: %v", smppID, err)
+			log.Printf("Проверка подключения к SMPP: не удалось подключиться к SMPP ID=%d: %v", smppID, err)
 			continue
 		}
 
 		return true
 	}
 
-	log.Println("EnsureSMPPConnectivity: ни один SMPP адаптер не доступен")
+	log.Println("Проверка подключения к SMPP: ни один SMPP адаптер не доступен")
 	return false
 }
 
