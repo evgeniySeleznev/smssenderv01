@@ -4,8 +4,23 @@ import (
 	"log"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	// randSource используется для генерации jitter в повторных попытках
+	// Инициализируется один раз при первом использовании
+	randSource     *rand.Rand
+	randSourceOnce sync.Once
+)
+
+// initRandSource инициализирует генератор случайных чисел для jitter
+func initRandSource() {
+	randSourceOnce.Do(func() {
+		randSource = rand.New(rand.NewSource(time.Now().UnixNano()))
+	})
+}
 
 // RetryMessage представляет сообщение для повторной отправки
 type RetryMessage struct {
@@ -117,10 +132,11 @@ func calculateNextRetryDelay(retryCount int, createdAt time.Time) (time.Duration
 		delay = exponentialDelay
 
 		// Добавляем jitter (±20%)
+		initRandSource() // Инициализируем генератор случайных чисел
 		jitterPercent := 0.2
 		jitter := time.Duration(float64(delay) * jitterPercent)
 		// Генерируем случайное значение от -jitter до +jitter
-		jitterValue := time.Duration(rand.Int63n(int64(jitter*2))) - jitter
+		jitterValue := time.Duration(randSource.Int63n(int64(jitter*2))) - jitter
 		delay = delay + jitterValue
 
 		// Убеждаемся, что задержка не отрицательная
@@ -163,11 +179,10 @@ func (s *Service) StartRetryWorker() {
 				return
 
 			case <-ticker.C:
-				// Забираем новые сообщения из очереди
+				// Забираем новые сообщения из очереди (swap для эффективности)
 				s.retryQueueMu.Lock()
-				newMessages := make([]*RetryMessage, len(s.retryQueue))
-				copy(newMessages, s.retryQueue)
-				s.retryQueue = s.retryQueue[:0] // Очищаем очередь
+				newMessages := s.retryQueue
+				s.retryQueue = make([]*RetryMessage, 0) // Создаем новый слайс вместо очистки
 				s.retryQueueMu.Unlock()
 
 				// Добавляем новые сообщения в pendingRetries
@@ -178,7 +193,7 @@ func (s *Service) StartRetryWorker() {
 
 				// Проверяем сообщения, готовые к повторной попытке
 				now := time.Now()
-				remainingRetries := make([]*RetryMessage, 0)
+				remainingRetries := make([]*RetryMessage, 0, len(pendingRetries)) // Предварительно выделяем память
 
 				for _, retryMsg := range pendingRetries {
 					if now.Before(retryMsg.NextRetryAt) {
@@ -247,7 +262,14 @@ func (s *Service) StartRetryWorker() {
 					}
 				}
 
-				pendingRetries = remainingRetries
+				// Оптимизация памяти: если размер уменьшился значительно, пересоздаем слайс
+				if len(remainingRetries) < len(pendingRetries)/2 && len(remainingRetries) > 0 {
+					newSlice := make([]*RetryMessage, len(remainingRetries))
+					copy(newSlice, remainingRetries)
+					pendingRetries = newSlice
+				} else {
+					pendingRetries = remainingRetries
+				}
 			}
 		}
 	}()
@@ -256,23 +278,30 @@ func (s *Service) StartRetryWorker() {
 // StopRetryWorker останавливает механизм повторных попыток
 func (s *Service) StopRetryWorker() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if !s.retryStarted {
+		s.mu.Unlock()
 		return
 	}
 
+	// Проверяем, не закрыт ли уже канал
 	select {
 	case <-s.retryStop:
 		// Уже остановлен
+		s.mu.Unlock()
 		return
 	default:
+		// Закрываем канал для сигнала остановки
 		close(s.retryStop)
 		s.retryStarted = false
 		s.mu.Unlock()
+
+		// Ждем завершения горутины (без блокировки основного мьютекса)
 		s.retryWg.Wait()
-		s.mu.Lock()
+
 		// Создаем новый канал для следующего запуска
+		s.mu.Lock()
 		s.retryStop = make(chan struct{})
+		s.mu.Unlock()
 	}
 }
