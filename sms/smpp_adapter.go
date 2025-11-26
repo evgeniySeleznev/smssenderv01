@@ -402,15 +402,21 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 }
 
 // isConnectionError проверяет, является ли ошибка ошибкой соединения
+// Проверяет как английские, так и русскоязычные ошибки подключения
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	errStr := strings.ToLower(err.Error())
+	// Проверяем специфичные ошибки библиотеки go-smpp через errors.Is
+	if errors.Is(err, smpp.ErrNotConnected) || errors.Is(err, smpp.ErrNotBound) {
+		return true
+	}
 
-	// Проверяем типичные ошибки соединения
+	// Проверяем строковые паттерны (для ошибок, создаваемых в приложении через fmt.Errorf)
+	errStr := strings.ToLower(err.Error())
 	connectionErrors := []string{
+		// Английские паттерны
 		"not connected",
 		"not bound",
 		"connection",
@@ -422,17 +428,17 @@ func isConnectionError(err error) bool {
 		"connection refused",
 		"no such host",
 		"network is unreachable",
+		// Русскоязычные паттерны (для ошибок, обернутых в fmt.Errorf)
+		"подключ",
+		"соединен",
+		"переподключ",
+		"smpp",
 	}
 
 	for _, connErr := range connectionErrors {
 		if strings.Contains(errStr, connErr) {
 			return true
 		}
-	}
-
-	// Проверяем специфичные ошибки библиотеки go-smpp
-	if errors.Is(err, smpp.ErrNotConnected) || errors.Is(err, smpp.ErrNotBound) {
-		return true
 	}
 
 	return false

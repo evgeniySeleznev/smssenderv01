@@ -1,11 +1,9 @@
 package sms
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -37,31 +35,24 @@ type RetryMessage struct {
 
 // isSMPPProviderError проверяет, является ли ошибка ошибкой SMPP провайдера
 // (ошибки соединения или отправки через SMPP, а не ошибки конфигурации или валидации)
-// Использует isConnectionError для проверки ошибок соединения (устраняет дублирование логики)
+// Использует isConnectionError, которая уже проверяет все типы ошибок соединения
 func (s *Service) isSMPPProviderError(err error) bool {
 	if err == nil {
 		return false
 	}
 
 	// Используем существующую функцию isConnectionError для проверки ошибок соединения
-	// Она уже проверяет сетевые ошибки, ошибки библиотеки go-smpp и строковые паттерны
+	// Она уже проверяет сетевые ошибки через errors.As, ошибки библиотеки go-smpp через errors.Is
+	// и строковые паттерны (включая русскоязычные)
 	if isConnectionError(err) {
 		return true
 	}
 
-	// Проверяем сетевые ошибки через errors.As (дополнительная проверка для случаев,
-	// которые не покрывает isConnectionError)
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-
-	// Проверяем русскоязычные ошибки отправки SMS (fallback для строковых проверок)
-	// Эти ошибки могут быть обернуты в fmt.Errorf и не попадать под isConnectionError
+	// Проверяем дополнительные русскоязычные ошибки отправки SMS
+	// (для случаев, которые не являются ошибками соединения, но связаны с SMPP)
 	errStr := strings.ToLower(err.Error())
 	smppErrorKeywords := []string{
 		"ошибка отправки sms",
-		"ошибка переподключения",
 		"smpp",
 	}
 
