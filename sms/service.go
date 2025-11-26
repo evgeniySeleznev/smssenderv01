@@ -43,6 +43,11 @@ type Service struct {
 	rebindTicker *time.Ticker         // Таймер для периодического переподключения
 	rebindStop   chan struct{}        // Канал для остановки переподключения
 	rebindWg     sync.WaitGroup       // WaitGroup для ожидания завершения горутины переподключения
+	retryQueue   []*RetryMessage      // Очередь сообщений для повторной отправки (неограниченная)
+	retryQueueMu sync.Mutex           // Мьютекс для защиты очереди повторных попыток
+	retryWg      sync.WaitGroup       // WaitGroup для ожидания завершения горутины повторных попыток
+	retryStop    chan struct{}        // Канал для остановки механизма повторных попыток
+	retryStarted bool                 // Флаг запуска механизма повторных попыток
 }
 
 // NewService создает новый сервис отправки SMS
@@ -54,6 +59,8 @@ func NewService(cfg *Config) *Service {
 		adapters:     make(map[int]*SMPPAdapter),
 		initialized:  false,
 		rebindStop:   make(chan struct{}),
+		retryQueue:   make([]*RetryMessage, 0), // Неограниченная очередь для повторных попыток
+		retryStop:    make(chan struct{}),
 	}
 }
 
@@ -102,6 +109,9 @@ func (s *Service) InitializeAdapters() error {
 
 	// Запускаем механизм периодического переподключения (после разблокировки)
 	s.StartPeriodicRebind()
+
+	// Запускаем механизм повторных попыток отправки SMS
+	s.StartRetryWorker()
 
 	return nil
 }
@@ -190,8 +200,11 @@ func (s *Service) StopPeriodicRebind() {
 }
 
 // Close закрывает все SMPP адаптеры и освобождает ресурсы
-// Перед вызовом Close() рекомендуется вызвать StopPeriodicRebind() для остановки механизма переподключения
+// Перед вызовом Close() рекомендуется вызвать StopPeriodicRebind() и StopRetryWorker() для остановки механизмов
 func (s *Service) Close() error {
+	// Останавливаем механизм повторных попыток
+	s.StopRetryWorker()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -295,6 +308,21 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 	// Отправка SMS
 	messageID, err := s.sendSMS(msg, smppCfg, phoneNumber)
 	if err != nil {
+		// Проверяем, является ли это ошибкой SMPP провайдера
+		if s.isSMPPProviderError(err) {
+			log.Printf("Ошибка SMPP провайдера при отправке SMS (TaskID=%d): %v, отправка в очередь повторных попыток", msg.TaskID, err)
+			// Отправляем в очередь повторных попыток
+			s.enqueueForRetry(msg, err)
+			// Возвращаем успешный ответ, так как сообщение будет обработано позже
+			return &SMSResponse{
+				TaskID:    msg.TaskID,
+				MessageID: "",
+				Status:    2, // Помечаем как "в обработке" (будет отправлено повторно)
+				ErrorText: "",
+				SentAt:    time.Now(),
+			}, nil
+		}
+		// Это не ошибка SMPP провайдера - возвращаем ошибку без повторных попыток
 		errText := fmt.Sprintf("Ошибка отправки абоненту: %v", err)
 		log.Printf("Ошибка отправки SMS: %s", errText)
 		return &SMSResponse{
