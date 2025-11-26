@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -262,7 +263,7 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 			testNumber, err := getTestPhone()
 			if err != nil {
 				errText := fmt.Sprintf("Ошибка получения тестового номера: %v", err)
-				log.Printf("Ошибка: %s", errText)
+				log.Printf("%s", errText)
 				return &SMSResponse{
 					TaskID:    msg.TaskID,
 					MessageID: "",
@@ -271,6 +272,21 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 					SentAt:    time.Now(),
 				}, nil
 			}
+
+			// Если тестовый номер пуст (например, значение отсутствует в БД),
+			// считаем, что отправлять SMS некуда и просто фиксируем событие в логах.
+			if strings.TrimSpace(testNumber) == "" {
+				errText := "Режим Debug: тестовый номер отсутствует, SMS не отправляется"
+				log.Printf("%s", errText)
+				return &SMSResponse{
+					TaskID:    msg.TaskID,
+					MessageID: "",
+					Status:    3, // ошибка
+					ErrorText: errText,
+					SentAt:    time.Now(),
+				}, nil
+			}
+
 			log.Printf("Режим Debug: номер %s заменен на тестовый номер %s", phoneNumber, testNumber)
 			phoneNumber = testNumber
 		} else {
