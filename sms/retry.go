@@ -1,9 +1,11 @@
 package sms
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -35,35 +37,36 @@ type RetryMessage struct {
 
 // isSMPPProviderError проверяет, является ли ошибка ошибкой SMPP провайдера
 // (ошибки соединения или отправки через SMPP, а не ошибки конфигурации или валидации)
+// Использует isConnectionError для проверки ошибок соединения (устраняет дублирование логики)
 func (s *Service) isSMPPProviderError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	errStr := strings.ToLower(err.Error())
+	// Используем существующую функцию isConnectionError для проверки ошибок соединения
+	// Она уже проверяет сетевые ошибки, ошибки библиотеки go-smpp и строковые паттерны
+	if isConnectionError(err) {
+		return true
+	}
 
-	// Проверяем типичные ошибки SMPP провайдера
-	smppErrors := []string{
+	// Проверяем сетевые ошибки через errors.As (дополнительная проверка для случаев,
+	// которые не покрывает isConnectionError)
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	// Проверяем русскоязычные ошибки отправки SMS (fallback для строковых проверок)
+	// Эти ошибки могут быть обернуты в fmt.Errorf и не попадать под isConnectionError
+	errStr := strings.ToLower(err.Error())
+	smppErrorKeywords := []string{
 		"ошибка отправки sms",
-		"ошибка соединения",
-		"ошибка подключения",
 		"ошибка переподключения",
-		"not connected",
-		"not bound",
-		"connection",
-		"dial tcp",
-		"connectex",
-		"timeout",
-		"broken pipe",
-		"connection reset",
-		"connection refused",
-		"no such host",
-		"network is unreachable",
 		"smpp",
 	}
 
-	for _, smppErr := range smppErrors {
-		if strings.Contains(errStr, smppErr) {
+	for _, keyword := range smppErrorKeywords {
+		if strings.Contains(errStr, keyword) {
 			return true
 		}
 	}
