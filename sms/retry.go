@@ -1,6 +1,7 @@
 package sms
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"strings"
@@ -13,6 +14,7 @@ var (
 	// Инициализируется один раз при первом использовании
 	randSource     *rand.Rand
 	randSourceOnce sync.Once
+	randSourceMu   sync.Mutex // Мьютекс для защиты доступа к randSource
 )
 
 // initRandSource инициализирует генератор случайных чисел для jitter
@@ -135,8 +137,10 @@ func calculateNextRetryDelay(retryCount int, createdAt time.Time) (time.Duration
 		initRandSource() // Инициализируем генератор случайных чисел
 		jitterPercent := 0.2
 		jitter := time.Duration(float64(delay) * jitterPercent)
-		// Генерируем случайное значение от -jitter до +jitter
+		// Генерируем случайное значение от -jitter до +jitter (с защитой от гонок)
+		randSourceMu.Lock()
 		jitterValue := time.Duration(randSource.Int63n(int64(jitter*2))) - jitter
+		randSourceMu.Unlock()
 		delay = delay + jitterValue
 
 		// Убеждаемся, что задержка не отрицательная
@@ -182,7 +186,10 @@ func (s *Service) StartRetryWorker() {
 				// Забираем новые сообщения из очереди (swap для эффективности)
 				s.retryQueueMu.Lock()
 				newMessages := s.retryQueue
-				s.retryQueue = make([]*RetryMessage, 0) // Создаем новый слайс вместо очистки
+				// Оптимизация: создаем новый слайс только если были сообщения
+				if len(s.retryQueue) > 0 {
+					s.retryQueue = make([]*RetryMessage, 0)
+				}
 				s.retryQueueMu.Unlock()
 
 				// Добавляем новые сообщения в pendingRetries
@@ -212,8 +219,23 @@ func (s *Service) StartRetryWorker() {
 					s.mu.RUnlock()
 
 					if !ok {
-						log.Printf("ОШИБКА: SMPP конфигурация не найдена для ID=%d (TaskID=%d), прекращаем повторные попытки",
-							retryMsg.Message.SMPPID, retryMsg.Message.TaskID)
+						// Конфигурация не найдена - обрабатываем как ошибку SMPP провайдера
+						// Пробуем еще раз (до 10 попыток), как и с другими ошибками отправки
+						err := fmt.Errorf("SMPP конфигурация не найдена для ID=%d", retryMsg.Message.SMPPID)
+						log.Printf("Повторная попытка неудачна (TaskID=%d, попытка %d/%d): %v",
+							retryMsg.Message.TaskID, retryMsg.RetryCount, 10, err)
+
+						// Вычисляем задержку до следующей попытки
+						delay, shouldRetry := calculateNextRetryDelay(retryMsg.RetryCount, retryMsg.CreatedAt)
+						if !shouldRetry {
+							log.Printf("ПРЕКРАЩЕНИЕ повторных попыток для SMS (TaskID=%d): превышен лимит попыток (%d) или время (создано: %v)",
+								retryMsg.Message.TaskID, retryMsg.RetryCount, retryMsg.CreatedAt)
+							continue // Теряем сообщение
+						}
+
+						retryMsg.NextRetryAt = now.Add(delay)
+						log.Printf("Следующая попытка через %v", delay)
+						remainingRetries = append(remainingRetries, retryMsg)
 						continue
 					}
 

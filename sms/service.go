@@ -313,12 +313,12 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 			log.Printf("Ошибка SMPP провайдера при отправке SMS (TaskID=%d): %v, отправка в очередь повторных попыток", msg.TaskID, err)
 			// Отправляем в очередь повторных попыток
 			s.enqueueForRetry(msg, err)
-			// Возвращаем успешный ответ, так как сообщение будет обработано позже
+			// Возвращаем статус ошибки, так как сообщение будет отправлено повторно (до 10 попыток)
 			return &SMSResponse{
 				TaskID:    msg.TaskID,
 				MessageID: "",
-				Status:    2, // Помечаем как "в обработке" (будет отправлено повторно)
-				ErrorText: "",
+				Status:    3, // Ошибка (будет отправлено повторно до 10 раз)
+				ErrorText: fmt.Sprintf("Ошибка отправки, будет повторная попытка: %v", err),
 				SentAt:    time.Now(),
 			}, nil
 		}
