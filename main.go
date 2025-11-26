@@ -158,6 +158,13 @@ func main() {
 			}
 		}()
 
+		// Перед чтением проверяем наличие доступных SMPP соединений, чтобы не вычитывать сообщения впустую
+		if !smsService.EnsureSMPPConnectivity() {
+			log.Println("Нет доступных SMPP соединений, чтение очереди пропущено")
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
 		// Получаем сообщения из основной очереди (аналогично Python: messages = queue.deqmany(settings.query_number))
 		// Используем DequeueMany с количеством сообщений (аналогично settings.query_number = 100)
 		messages, err := queueReader.DequeueMany(100)

@@ -363,6 +363,42 @@ func (s *Service) sendSMS(msg SMSMessage, smppCfg *SMPPConfig, phoneNumber strin
 	return messageID, nil
 }
 
+// EnsureSMPPConnectivity убеждается, что хотя бы один SMPP адаптер подключен или может переподключиться.
+// Используется до чтения очереди, чтобы не извлекать сообщения, если отправка заведомо невозможна.
+func (s *Service) EnsureSMPPConnectivity() bool {
+	s.mu.RLock()
+	adaptersCopy := make(map[int]*SMPPAdapter, len(s.adapters))
+	for id, adapter := range s.adapters {
+		adaptersCopy[id] = adapter
+	}
+	s.mu.RUnlock()
+
+	if len(adaptersCopy) == 0 {
+		log.Println("EnsureSMPPConnectivity: нет инициализированных SMPP адаптеров")
+		return false
+	}
+
+	for smppID, adapter := range adaptersCopy {
+		if adapter == nil {
+			continue
+		}
+		if adapter.IsConnected() {
+			return true
+		}
+
+		log.Printf("EnsureSMPPConnectivity: SMPP ID=%d не подключен, попытка Bind...", smppID)
+		if err := adapter.Bind(); err != nil {
+			log.Printf("EnsureSMPPConnectivity: не удалось подключиться к SMPP ID=%d: %v", smppID, err)
+			continue
+		}
+
+		return true
+	}
+
+	log.Println("EnsureSMPPConnectivity: ни один SMPP адаптер не доступен")
+	return false
+}
+
 // getOrCreateAdapter получает существующий адаптер или создает новый для указанного SMPP ID
 func (s *Service) getOrCreateAdapter(smppID int, smppCfg *SMPPConfig) (*SMPPAdapter, error) {
 	s.mu.RLock()
