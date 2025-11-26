@@ -42,7 +42,8 @@ func NewExceptionQueueReader(dbConn *DBConnection) (*ExceptionQueueReader, error
 
 // DequeueMany извлекает несколько сообщений из exception queue
 // Возвращает слайс сообщений, может быть пустым если очередь пуста
-func (eqr *ExceptionQueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
+// Принимает контекст для возможности отмены операций при graceful shutdown
+func (eqr *ExceptionQueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMessage, error) {
 	eqr.mu.Lock()
 	defer eqr.mu.Unlock()
 
@@ -58,8 +59,21 @@ func (eqr *ExceptionQueueReader) DequeueMany(count int) ([]*QueueMessage, error)
 
 	// Извлекаем сообщения по одному
 	for i := 0; i < count; i++ {
-		msg, err := eqr.dequeueOneMessage()
+		// Проверяем контекст перед каждой итерацией для возможности прерывания
+		select {
+		case <-ctx.Done():
+			log.Printf("Операция чтения из exception queue прервана (получено %d сообщений)", len(messages))
+			return messages, ctx.Err()
+		default:
+		}
+
+		msg, err := eqr.dequeueOneMessage(ctx)
 		if err != nil {
+			// Если ошибка связана с отменой контекста, возвращаем частичный результат
+			if ctx.Err() != nil {
+				log.Printf("Операция чтения из exception queue прервана из-за отмены контекста (получено %d сообщений)", len(messages))
+				return messages, ctx.Err()
+			}
 			return messages, err
 		}
 		if msg == nil {
@@ -75,12 +89,13 @@ func (eqr *ExceptionQueueReader) DequeueMany(count int) ([]*QueueMessage, error)
 // dequeueOneMessage извлекает одно сообщение из exception queue
 // Использует DBMS_AQ.DEQUEUE с XMLType payload
 // НЕ использует consumer_name для exception queue
-func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
+// Принимает контекст для возможности отмены операций при graceful shutdown
+func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueMessage, error) {
 	log.Printf("Попытка извлечения сообщения из exception queue %s (timeout: %d сек)",
 		eqr.queueName, eqr.waitTimeout)
 
-	// Создаем контекст с таймаутом для создания пакета
-	packageCtx, packageCancel := context.WithTimeout(context.Background(), execTimeout)
+	// Создаем контекст с таймаутом для создания пакета (объединяем с переданным контекстом)
+	packageCtx, packageCancel := context.WithTimeout(ctx, execTimeout)
 	defer packageCancel()
 
 	// Создаем пакет с переменными и функциями для доступа к ним
@@ -189,13 +204,15 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage() (*QueueMessage, error) {
 	eqr.dbConn.BeginOperation()
 	defer eqr.dbConn.EndOperation()
 
-	// Создаем контекст с таймаутом для транзакции
+	// Создаем контекст с таймаутом для транзакции, объединяя с переданным контекстом
+	// Это позволяет отменить транзакцию при graceful shutdown
 	// Таймаут = waitTimeout + небольшой запас для выполнения операций
 	txTimeout := time.Duration(eqr.waitTimeout)*time.Second + 5*time.Second
 	if txTimeout > execTimeout {
 		txTimeout = execTimeout
 	}
-	txCtx, txCancel := context.WithTimeout(context.Background(), txTimeout)
+	// Объединяем переданный контекст с таймаутом для возможности отмены
+	txCtx, txCancel := context.WithTimeout(ctx, txTimeout)
 	defer txCancel()
 
 	// Выполняем операции в транзакции для обеспечения атомарности

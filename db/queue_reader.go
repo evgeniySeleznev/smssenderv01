@@ -58,7 +58,8 @@ func NewQueueReader(dbConn *DBConnection) (*QueueReader, error) {
 // DequeueMany извлекает несколько сообщений из очереди (аналогично queue.deqmany() в Python)
 // Возвращает слайс сообщений, может быть пустым если очередь пуста
 // По аналогии с Python: queue.deqmany(settings.query_number)
-func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
+// Принимает контекст для возможности отмены операций при graceful shutdown
+func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMessage, error) {
 	qr.mu.Lock()
 	defer qr.mu.Unlock()
 
@@ -78,10 +79,13 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 	log.Printf("Попытка извлечения до %d сообщений из очереди %s (consumer: %s, timeout: %d сек)",
 		count, qr.queueName, consumerName, qr.waitTimeout)
 
-	// Создаем пакет один раз перед извлечением всех сообщений
-	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	// Создаем контекст с таймаутом для операций (объединяем с переданным контекстом)
+	// Это позволяет отменить операции при graceful shutdown
+	opCtx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	if err := qr.ensurePackageExists(ctx); err != nil {
+
+	// Создаем пакет один раз перед извлечением всех сообщений
+	if err := qr.ensurePackageExists(opCtx); err != nil {
 		return nil, fmt.Errorf("ошибка создания пакета: %w", err)
 	}
 
@@ -91,6 +95,14 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 	// Для первого сообщения используем полный waitTimeout, для последующих - минимальный (50 мс),
 	// чтобы быстро понять, что очередь пуста, и не ждать 10 секунд
 	for i := 0; i < count; i++ {
+		// Проверяем контекст перед каждой итерацией для возможности прерывания
+		select {
+		case <-ctx.Done():
+			log.Printf("Операция чтения из очереди прервана (получено %d сообщений)", len(messages))
+			return messages, ctx.Err()
+		default:
+		}
+
 		// Для первого сообщения используем полный timeout, для остальных - минимальный
 		var timeout float64
 		if i == 0 {
@@ -101,8 +113,13 @@ func (qr *QueueReader) DequeueMany(count int) ([]*QueueMessage, error) {
 			timeout = 0.05
 		}
 
-		msg, err := qr.dequeueOneMessageWithTimeout(timeout)
+		msg, err := qr.dequeueOneMessageWithTimeout(ctx, timeout)
 		if err != nil {
+			// Если ошибка связана с отменой контекста, возвращаем частичный результат
+			if ctx.Err() != nil {
+				log.Printf("Операция чтения из очереди прервана из-за отмены контекста (получено %d сообщений)", len(messages))
+				return messages, ctx.Err()
+			}
 			return messages, err
 		}
 		if msg == nil {
@@ -180,7 +197,8 @@ func (qr *QueueReader) ensurePackageExists(ctx context.Context) error {
 // По аналогии с Python: queue.deqmany() -> получаем массив сообщений
 // Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
 // Использует подход с функцией, возвращающей данные через SELECT с XMLSerialize (аналогично Python)
-func (qr *QueueReader) dequeueOneMessageWithTimeout(timeout float64) (*QueueMessage, error) {
+// Принимает контекст для возможности отмены операций при graceful shutdown
+func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout float64) (*QueueMessage, error) {
 	// Используем подход аналогичный Python:
 	// cursor.execute("SELECT XMLSerialize(DOCUMENT :xml AS CLOB) FROM DUAL", xml=message.payload)
 	// Создаем функцию, которая делает dequeue и возвращает данные через SELECT с XMLSerialize
@@ -250,13 +268,15 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(timeout float64) (*QueueMess
 	qr.dbConn.BeginOperation()
 	defer qr.dbConn.EndOperation()
 
-	// Создаем контекст с таймаутом для транзакции
+	// Создаем контекст с таймаутом для транзакции, объединяя с переданным контекстом
+	// Это позволяет отменить транзакцию при graceful shutdown
 	// Таймаут = timeout запроса + небольшой запас для выполнения операций
 	txTimeout := time.Duration(timeout)*time.Second + 5*time.Second
 	if txTimeout > execTimeout {
 		txTimeout = execTimeout
 	}
-	txCtx, txCancel := context.WithTimeout(context.Background(), txTimeout)
+	// Объединяем переданный контекст с таймаутом для возможности отмены
+	txCtx, txCancel := context.WithTimeout(ctx, txTimeout)
 	defer txCancel()
 
 	// Выполняем операции в транзакции для обеспечения атомарности

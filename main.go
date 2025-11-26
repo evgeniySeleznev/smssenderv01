@@ -1,17 +1,42 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"oracle-client/db"
 	"oracle-client/sms"
+	"os"
+	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 func main() {
+	// Создаем контекст для graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Настраиваем обработку сигналов для graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	// Обрабатываем основные сигналы, которые работают на всех платформах
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	// Также обрабатываем SIGHUP на Unix системах (на Windows не поддерживается)
+	if runtime.GOOS != "windows" {
+		signal.Notify(sigChan, syscall.SIGHUP)
+	}
+
+	// Горутина для обработки сигналов
+	go func() {
+		sig := <-sigChan
+		log.Printf("Получен сигнал %v, инициируется graceful shutdown...", sig)
+		cancel()
+	}()
+
 	// Создаем подключение к БД
 	dbConn, err := db.NewDBConnection()
 	if err != nil {
@@ -85,9 +110,15 @@ func main() {
 	}
 
 	// Функция для асинхронной обработки батча сообщений
-	processMessagesBatch := func(messages []*db.QueueMessage, batchNum int) {
+	// ВАЖНО: Сообщения уже вычитаны из очереди Oracle, поэтому мы ОБЯЗАНЫ обработать их до конца,
+	// иначе они будут потеряны. При graceful shutdown мы прекращаем только чтение новых сообщений,
+	// но продолжаем обрабатывать уже вычитанные.
+	processMessagesBatch := func(ctx context.Context, messages []*db.QueueMessage, batchNum int) {
 		log.Printf("Обработка батча %d: %d сообщений", batchNum, len(messages))
 		for i, msg := range messages {
+			// НЕ прерываем обработку уже вычитанных сообщений - они должны быть обработаны до конца
+			// Проверка контекста здесь только для логирования, но не для прерывания
+
 			log.Printf("\n--- Сообщение %d (батч %d) ---", i+1, batchNum)
 			log.Printf("MessageID: %s", msg.MessageID)
 			log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
@@ -122,6 +153,7 @@ func main() {
 				response.TaskID, response.Status, response.MessageID, response.ErrorText)
 
 			// Задержка между обработкой сообщений (аналогично C#: Thread.Sleep(20))
+			// НЕ прерываем задержку - сообщения уже вычитаны из очереди и должны быть обработаны
 			time.Sleep(20 * time.Millisecond)
 		}
 		log.Printf("Батч %d обработан", batchNum)
@@ -129,12 +161,34 @@ func main() {
 
 	// WaitGroup для отслеживания всех обработчиков сообщений
 	var allHandlersWg sync.WaitGroup
-	// Флаг для отслеживания необходимости завершения
-	var shouldExit bool
-	var exitMu sync.Mutex
 
+	// Запускаем основной цикл обработки очереди
+	runQueueProcessingLoop(ctx, cancel, queueReader, exceptionQueueReader, smsService, dbConn, processExceptionQueue, &allHandlersWg, processMessagesBatch)
+
+	// Graceful shutdown: дожидаемся завершения всех операций
+	performGracefulShutdown(smsService, dbConn, &allHandlersWg)
+}
+
+// runQueueProcessingLoop выполняет основной цикл чтения и обработки сообщений из очереди
+func runQueueProcessingLoop(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	queueReader *db.QueueReader,
+	exceptionQueueReader *db.ExceptionQueueReader,
+	smsService *sms.Service,
+	dbConn *db.DBConnection,
+	processExceptionQueue bool,
+	allHandlersWg *sync.WaitGroup,
+	processMessagesBatch func(context.Context, []*db.QueueMessage, int),
+) {
 	// Бесконечный цикл чтения из очереди (аналогично Python: while True)
 	for {
+		// Проверяем контекст перед началом итерации
+		if ctx.Err() != nil {
+			log.Println("Получен сигнал остановки, прекращаем чтение из очереди...")
+			return
+		}
+
 		// Создаем новый канал для сигнала на каждой итерации
 		iterationSignalChan := make(chan struct{})
 
@@ -149,11 +203,12 @@ func main() {
 			case <-timer.C:
 				// Таймер сработал - не получили ответ за 2 минуты
 				log.Println("Таймаут: не получен ответ из DequeueMany в течение 2 минут, завершаем работу...")
-				exitMu.Lock()
-				shouldExit = true
-				exitMu.Unlock()
+				cancel()
 			case <-iterationSignalChan:
 				// Получили сигнал - ответ получен, прекращаем работу горутины
+				return
+			case <-ctx.Done():
+				// Получен сигнал остановки
 				return
 			}
 		}()
@@ -161,13 +216,16 @@ func main() {
 		// Перед чтением проверяем наличие доступных SMPP соединений, чтобы не вычитывать сообщения впустую
 		if !smsService.EnsureSMPPConnectivity() {
 			log.Println("Нет доступных SMPP соединений, чтение очереди пропущено")
-			time.Sleep(5 * time.Second)
+			if !sleepWithContext(ctx, 5*time.Second) {
+				return
+			}
 			continue
 		}
 
 		// Получаем сообщения из основной очереди (аналогично Python: messages = queue.deqmany(settings.query_number))
 		// Используем DequeueMany с количеством сообщений (аналогично settings.query_number = 100)
-		messages, err := queueReader.DequeueMany(100)
+		// Передаем контекст для возможности отмены операций при graceful shutdown
+		messages, err := queueReader.DequeueMany(ctx, 100)
 
 		// Отправляем сигнал в горутину о получении ответа (независимо от результата)
 		close(iterationSignalChan)
@@ -175,10 +233,14 @@ func main() {
 			log.Printf("Ошибка при выборке сообщений: %v", err)
 			// При ошибке - переподключение
 			log.Println("Ошибка соединения, переподключение...")
-			time.Sleep(5 * time.Second)
+			if !sleepWithContext(ctx, 5*time.Second) {
+				return
+			}
 			if err := dbConn.Reconnect(); err != nil {
 				log.Printf("Ошибка переподключения: %v", err)
-				time.Sleep(5 * time.Second)
+				if !sleepWithContext(ctx, 5*time.Second) {
+					return
+				}
 			}
 			continue
 		}
@@ -196,6 +258,12 @@ func main() {
 			var wg sync.WaitGroup
 
 			for i := 0; i < len(messages); i += batchSize {
+				// Проверяем контекст перед запуском нового батча
+				if ctx.Err() != nil {
+					log.Printf("Получен сигнал остановки, прекращаем запуск новых батчей (обработано %d/%d сообщений)", i, len(messages))
+					break
+				}
+
 				end := i + batchSize
 				if end > len(messages) {
 					end = len(messages)
@@ -208,7 +276,7 @@ func main() {
 				go func(batch []*db.QueueMessage, num int) {
 					defer wg.Done()
 					defer allHandlersWg.Done()
-					processMessagesBatch(batch, num)
+					processMessagesBatch(ctx, batch, num)
 				}(batch, batchNum)
 			}
 
@@ -222,7 +290,8 @@ func main() {
 			allHandlersWg.Add(1)
 			go func() {
 				defer allHandlersWg.Done()
-				exceptionMessages, err := exceptionQueueReader.DequeueMany(100)
+				// Передаем контекст для возможности отмены операций при graceful shutdown
+				exceptionMessages, err := exceptionQueueReader.DequeueMany(ctx, 100)
 				if err != nil {
 					log.Printf("Ошибка при выборке сообщений из exception queue: %v", err)
 					return
@@ -230,7 +299,9 @@ func main() {
 				if len(exceptionMessages) > 0 {
 					log.Printf("Получено сообщений из exception queue: %d", len(exceptionMessages))
 
+					// ВАЖНО: Сообщения уже вычитаны из exception queue, поэтому мы ОБЯЗАНЫ обработать их до конца
 					for i, msg := range exceptionMessages {
+
 						log.Printf("\n--- Exception Queue Сообщение %d ---", i+1)
 						log.Printf("MessageID: %s", msg.MessageID)
 						log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
@@ -268,25 +339,46 @@ func main() {
 			}()
 		}
 
-		// Проверяем флаг завершения
-		exitMu.Lock()
-		if shouldExit {
-			exitMu.Unlock()
-			log.Println("Ожидание завершения всех обработчиков сообщений...")
-			allHandlersWg.Wait()
-			log.Println("Остановка механизма периодического переподключения SMPP...")
-			smsService.StopPeriodicRebind()
-			log.Println("Закрытие SMPP адаптеров...")
-			if err := smsService.Close(); err != nil {
-				log.Printf("Ошибка при закрытии SMPP адаптеров: %v", err)
-			}
-			log.Println("Все обработчики завершены, выход из приложения")
-			return
-		}
-		exitMu.Unlock()
-
 		// Пауза между циклами: 0.5 секунды (аналогично Python: time.sleep(settings.main_circle_pause))
 		// где main_circle_pause = 0.5 секунд
-		time.Sleep(500 * time.Millisecond)
+		// Используем select для возможности прерывания во время задержки
+		if !sleepWithContext(ctx, 500*time.Millisecond) {
+			return
+		}
 	}
+}
+
+// sleepWithContext выполняет задержку с возможностью прерывания через контекст
+// Возвращает false, если контекст был отменен
+func sleepWithContext(ctx context.Context, duration time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(duration):
+		return true
+	}
+}
+
+// performGracefulShutdown выполняет корректное завершение всех операций
+func performGracefulShutdown(smsService *sms.Service, dbConn *db.DBConnection, allHandlersWg *sync.WaitGroup) {
+	log.Println("Начало graceful shutdown...")
+	log.Println("Ожидание завершения всех обработчиков сообщений...")
+	allHandlersWg.Wait()
+	log.Println("Все обработчики сообщений завершены")
+
+	log.Println("Остановка механизма периодического переподключения SMPP...")
+	smsService.StopPeriodicRebind()
+
+	log.Println("Остановка механизма повторных попыток отправки SMS...")
+	smsService.StopRetryWorker()
+
+	log.Println("Закрытие SMPP адаптеров...")
+	if err := smsService.Close(); err != nil {
+		log.Printf("Ошибка при закрытии SMPP адаптеров: %v", err)
+	}
+
+	log.Println("Остановка механизма периодического переподключения к БД...")
+	dbConn.StopPeriodicReconnect()
+
+	log.Println("Graceful shutdown завершен успешно")
 }
