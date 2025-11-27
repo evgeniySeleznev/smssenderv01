@@ -3,7 +3,6 @@ package sms
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +11,9 @@ import (
 	"github.com/fiorix/go-smpp/smpp/pdu/pdufield"
 	"github.com/fiorix/go-smpp/smpp/pdu/pdutext"
 	"github.com/fiorix/go-smpp/smpp/pdu/pdutlv"
+	"go.uber.org/zap"
+
+	"oracle-client/logger"
 )
 
 // Константы для TON и NPI согласно стандарту SMPP
@@ -77,11 +79,18 @@ func (a *SMPPAdapter) createClient() {
 // Bind выполняет подключение к SMPP серверу
 func (a *SMPPAdapter) Bind() error {
 	a.mu.Lock()
-	log.Printf("Bind(): подключение к %s:%d, User: %s", a.config.Host, a.config.Port, a.config.User)
+	if logger.Log != nil {
+		logger.Log.Debug("Bind(): подключение",
+			zap.String("host", a.config.Host),
+			zap.Int("port", int(a.config.Port)),
+			zap.String("user", a.config.User))
+	}
 
 	// Если клиент существует, полностью закрываем его перед переподключением
 	if a.client != nil {
-		log.Printf("  Bind(): закрытие существующего клиента, если он подключен...")
+		if logger.Log != nil {
+			logger.Log.Debug("Bind(): закрытие существующего клиента, если он подключен")
+		}
 		// Сохраняем ссылку на старый канал для проверки
 		oldStatusChan := a.statusChan
 		a.unbindInternal()
@@ -91,19 +100,23 @@ func (a *SMPPAdapter) Bind() error {
 
 		// Даем время на закрытие соединения и завершение горутины
 		// Если старая горутина еще работает, она завершится когда канал закроется
-		log.Printf("  Bind(): ожидание закрытия старого соединения...")
+		if logger.Log != nil {
+			logger.Log.Debug("Bind(): ожидание закрытия старого соединения")
+		}
 		time.Sleep(500 * time.Millisecond)
 
 		// Проверяем, закрыт ли старый канал (неблокирующая проверка)
 		if oldStatusChan != nil {
 			select {
 			case _, ok := <-oldStatusChan:
-				if !ok {
-					log.Printf("  Bind(): старый канал статуса закрыт")
+				if !ok && logger.Log != nil {
+					logger.Log.Debug("Bind(): старый канал статуса закрыт")
 				}
 			default:
 				// Канал еще открыт, но это нормально - он закроется при закрытии клиента
-				log.Printf("  Bind(): старый канал еще открыт, продолжаем...")
+				if logger.Log != nil {
+					logger.Log.Debug("Bind(): старый канал еще открыт, продолжаем")
+				}
 			}
 		}
 
@@ -120,7 +133,11 @@ func (a *SMPPAdapter) Bind() error {
 		if delay > 30*time.Second {
 			delay = 30 * time.Second // Максимальная задержка 30 секунд
 		}
-		log.Printf("  Bind(): задержка перед повторной попыткой: %v (неудачных попыток подряд: %d)", delay, a.consecutiveFailures)
+		if logger.Log != nil {
+			logger.Log.Debug("Bind(): задержка перед повторной попыткой",
+				zap.Duration("delay", delay),
+				zap.Int("consecutiveFailures", a.consecutiveFailures))
+		}
 		a.mu.Unlock()
 		time.Sleep(delay - timeSinceLastAttempt)
 		a.mu.Lock()
@@ -128,32 +145,44 @@ func (a *SMPPAdapter) Bind() error {
 	a.lastBindAttempt = time.Now()
 
 	// Всегда создаем новый клиент при переподключении
-	log.Printf("  Bind(): создание нового клиента...")
+	if logger.Log != nil {
+		logger.Log.Debug("Bind(): создание нового клиента")
+	}
 	a.createClient()
 
 	// Выполняем Bind и получаем канал статуса
-	log.Printf("  Bind(): вызов client.Bind()...")
+	if logger.Log != nil {
+		logger.Log.Debug("Bind(): вызов client.Bind()")
+	}
 	a.statusChan = a.client.Bind()
 	a.mu.Unlock()
 
 	// Ждем первого статуса подключения напрямую из канала библиотеки
-	log.Printf("  Bind(): ожидание первого статуса...")
+	if logger.Log != nil {
+		logger.Log.Debug("Bind(): ожидание первого статуса")
+	}
 	select {
 	case status, ok := <-a.statusChan:
 		if !ok {
-			log.Printf("  Bind(): канал статуса закрыт до получения статуса")
+			if logger.Log != nil {
+				logger.Log.Warn("Bind(): канал статуса закрыт до получения статуса")
+			}
 			a.mu.Lock()
 			a.consecutiveFailures++
 			a.mu.Unlock()
 			return fmt.Errorf("канал статуса закрыт")
 		}
-		log.Printf("  Bind(): получен первый статус: %v, ошибка: %v", status.Status(), status.Error())
+		if logger.Log != nil {
+			logger.Log.Debug("Bind(): получен первый статус",
+				zap.String("status", status.Status().String()),
+				zap.Error(status.Error()))
+		}
 
 		// Проверяем статус подключения
 		if status.Status() != smpp.Connected {
 			err := status.Error()
-			if err != nil {
-				log.Printf("  Bind(): ошибка подключения: %v", err)
+			if err != nil && logger.Log != nil {
+				logger.Log.Error("Bind(): ошибка подключения", zap.Error(err))
 			}
 			a.mu.Lock()
 			a.consecutiveFailures++
@@ -173,29 +202,43 @@ func (a *SMPPAdapter) Bind() error {
 
 		// Запускаем горутину для отслеживания последующих изменений статуса
 		go func() {
-			log.Printf("  Bind(): горутина отслеживания статуса запущена")
+			if logger.Log != nil {
+				logger.Log.Debug("Bind(): горутина отслеживания статуса запущена")
+			}
 			for status := range a.statusChan {
-				log.Printf("  Bind(): получен статус: %v, ошибка: %v", status.Status(), status.Error())
+				if logger.Log != nil {
+					logger.Log.Debug("Bind(): получен статус",
+						zap.String("status", status.Status().String()),
+						zap.Error(status.Error()))
+				}
 				a.mu.Lock()
 				a.isConnected = (status.Status() == smpp.Connected)
 				if !a.isConnected && status.Error() != nil {
-					log.Printf("SMPP соединение потеряно: %v", status.Error())
+					if logger.Log != nil {
+						logger.Log.Warn("SMPP соединение потеряно", zap.Error(status.Error()))
+					}
 				}
 				if a.isConnected {
 					a.lastAnswerTime = time.Now()
 				}
 				a.mu.Unlock()
 			}
-			log.Printf("  Bind(): канал статуса закрыт, завершение горутины")
+			if logger.Log != nil {
+				logger.Log.Debug("Bind(): канал статуса закрыт, завершение горутины")
+			}
 			a.mu.Lock()
 			a.isConnected = false
 			a.mu.Unlock()
 		}()
 
-		log.Printf("  Bind(): успешно подключен")
+		if logger.Log != nil {
+			logger.Log.Info("Bind(): успешно подключен")
+		}
 		return nil
 	case <-time.After(30 * time.Second):
-		log.Printf("  Bind(): таймаут подключения (30 секунд) - статус не получен")
+		if logger.Log != nil {
+			logger.Log.Warn("Bind(): таймаут подключения (30 секунд) - статус не получен")
+		}
 		a.mu.Lock()
 		a.consecutiveFailures++
 		a.mu.Unlock()
@@ -216,13 +259,19 @@ func (a *SMPPAdapter) Unbind() {
 	defer a.mu.Unlock()
 
 	if a.client == nil || !a.IsConnected() {
-		log.Printf("Unbind() не требуется")
+		if logger.Log != nil {
+			logger.Log.Debug("Unbind() не требуется")
+		}
 		return
 	}
 
-	log.Printf("Unbind() отключение")
+	if logger.Log != nil {
+		logger.Log.Info("Unbind() отключение")
+	}
 	a.unbindInternal()
-	log.Printf("   Отключились")
+	if logger.Log != nil {
+		logger.Log.Debug("Отключились")
+	}
 }
 
 // IsConnected проверяет, подключен ли клиент
@@ -258,8 +307,12 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 		if timeSinceLastAnswer > rebindInterval*80/100 {
 			timeSinceLastLog := time.Since(a.lastRebindLogTime)
 			if timeSinceLastLog >= 5*time.Second {
-				log.Printf("Rebind(): проверка - прошло %v с последнего ответа, требуется %v (осталось %v)",
-					timeSinceLastAnswer, rebindInterval, rebindInterval-timeSinceLastAnswer)
+				if logger.Log != nil {
+					logger.Log.Debug("Rebind(): проверка",
+						zap.Duration("timeSinceLastAnswer", timeSinceLastAnswer),
+						zap.Duration("rebindInterval", rebindInterval),
+						zap.Duration("remaining", rebindInterval-timeSinceLastAnswer))
+				}
 				a.lastRebindLogTime = time.Now()
 			}
 		}
@@ -267,8 +320,11 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 		return true
 	}
 
-	log.Printf("Rebind(): прошло %v с последнего ответа (интервал: %v), выполняется переподключение",
-		timeSinceLastAnswer, rebindInterval)
+	if logger.Log != nil {
+		logger.Log.Info("Rebind(): выполняется переподключение",
+			zap.Duration("timeSinceLastAnswer", timeSinceLastAnswer),
+			zap.Duration("rebindInterval", rebindInterval))
+	}
 
 	a.mu.Unlock() // Разблокируем перед вызовом Bind, чтобы избежать deadlock
 
@@ -276,11 +332,15 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 	err := a.Bind()
 
 	if err != nil {
-		log.Printf("Rebind(): ошибка переподключения: %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Rebind(): ошибка переподключения", zap.Error(err))
+		}
 		return false
 	}
 
-	log.Printf("Rebind(): успешно переподключен")
+	if logger.Log != nil {
+		logger.Log.Info("Rebind(): успешно переподключен")
+	}
 	return true
 }
 
@@ -341,7 +401,9 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	trySend := func() (string, error) {
 		// Проверяем соединение и подключаемся только если не подключены
 		if !a.IsConnected() {
-			log.Printf("SendSMS(): соединение не установлено, выполняется подключение...")
+			if logger.Log != nil {
+				logger.Log.Debug("SendSMS(): соединение не установлено, выполняется подключение")
+			}
 			if err := a.Bind(); err != nil {
 				return "", fmt.Errorf("ошибка подключения: %w", err)
 			}
@@ -353,7 +415,9 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 		if err != nil {
 			// Проверяем, является ли ошибка ошибкой соединения
 			if isConnectionError(err) {
-				log.Printf("SendSMS(): обнаружена ошибка соединения: %v", err)
+				if logger.Log != nil {
+					logger.Log.Warn("SendSMS(): обнаружена ошибка соединения", zap.Error(err))
+				}
 				// Помечаем соединение как разорванное
 				a.mu.Lock()
 				a.isConnected = false
@@ -382,7 +446,9 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	if err != nil {
 		// Проверяем, является ли это ошибкой соединения
 		if isConnectionError(err) {
-			log.Printf("SendSMS(): ошибка соединения, попытка переподключения: %v", err)
+			if logger.Log != nil {
+				logger.Log.Warn("SendSMS(): ошибка соединения, попытка переподключения", zap.Error(err))
+			}
 			// Попытка переподключения и повторной отправки
 			if bindErr := a.Bind(); bindErr != nil {
 				return "", fmt.Errorf("ошибка переподключения: %w", bindErr)

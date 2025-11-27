@@ -1,0 +1,54 @@
+{"level":"info","ts":1764232351.2479844,"caller":"logger/logger.go:89","msg":"Логгер инициализирован","logLevel":5,"maxArchiveFiles":10,"logDir":"logs"}
+{"level":"info","ts":1764232351.3898969,"caller":"db/oracle_connector.go:304","msg":"Database connection opened (using Oracle Instant Client via godror)"}
+{"level":"info","ts":1764232351.3898969,"caller":"0s5/main.go:63","msg":"Успешно подключено к Oracle базе данных"}
+{"level":"info","ts":1764232351.390429,"caller":"0s5/main.go:73","msg":"Конфигурация SMS загружена","silent":false}
+{"level":"info","ts":1764232351.390429,"caller":"db/oracle_connector.go:328","msg":"Запущен механизм периодического переподключения к БД","interval":1800}
+{"level":"info","ts":1764232353.1354809,"caller":"0s5/main.go:93","msg":"Настройки очереди","queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER"}
+{"level":"info","ts":1764232353.1354809,"caller":"0s5/main.go:96","msg":"Начало работы с очередью Oracle AQ..."}
+{"level":"debug","ts":1764232353.1360161,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764232363.1945066,"caller":"0s5/main.go:267","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764232363.6954777,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"info","ts":1764232366.110367,"caller":"0s5/main.go:54","msg":"Получен сигнал, инициируется graceful shutdown","signal":"interrupt"}
+{"level":"error","ts":1764232366.1345346,"caller":"db/queue_reader.go:314","msg":"Ошибка отката транзакции","error":"sql: transaction has already been committed or rolled back","stacktrace":"oracle-client/db.(*QueueReader).dequeueOneMessageWithTimeout\n\tB:/0s5/db/queue_reader.go:314\noracle-client/db.(*QueueReader).DequeueMany\n\tB:/0s5/db/queue_reader.go:127\nmain.runQueueProcessingLoop\n\tB:/0s5/main.go:244\nmain.main\n\tB:/0s5/main.go:182\nruntime.main\n\tB:/Go/GOPATH/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.windows-amd64/src/runtime/proc.go:285"}
+{"level":"error","ts":1764232366.1345346,"caller":"db/queue_reader.go:325","msg":"Ошибка выполнения PL/SQL для dequeue","error":"context canceled","consumer":"SUB_SMS_SENDER","queue":"ASKAQ.AQ_ASK","timeout":10,"stacktrace":"oracle-client/db.(*QueueReader).dequeueOneMessageWithTimeout\n\tB:/0s5/db/queue_reader.go:325\noracle-client/db.(*QueueReader).DequeueMany\n\tB:/0s5/db/queue_reader.go:127\nmain.runQueueProcessingLoop\n\tB:/0s5/main.go:244\nmain.main\n\tB:/0s5/main.go:182\nruntime.main\n\tB:/Go/GOPATH/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.windows-amd64/src/runtime/proc.go:285"}
+{"level":"info","ts":1764232366.1350496,"caller":"db/queue_reader.go:132","msg":"Операция чтения из очереди прервана из-за отмены контекста","received":0}
+{"level":"error","ts":1764232366.1355817,"caller":"0s5/main.go:249","msg":"Ошибка при выборке сообщений","error":"context canceled","stacktrace":"main.runQueueProcessingLoop\n\tB:/0s5/main.go:249\nmain.main\n\tB:/0s5/main.go:182\nruntime.main\n\tB:/Go/GOPATH/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.windows-amd64/src/runtime/proc.go:285"}
+{"level":"info","ts":1764232366.1355817,"caller":"0s5/main.go:251","msg":"Ошибка соединения, переподключение..."}
+{"level":"info","ts":1764232366.1355817,"caller":"0s5/main.go:385","msg":"Начало graceful shutdown..."}
+{"level":"info","ts":1764232366.1355817,"caller":"0s5/main.go:386","msg":"Ожидание завершения всех обработчиков сообщений..."}
+{"level":"info","ts":1764232366.136107,"caller":"0s5/main.go:388","msg":"Все обработчики сообщений завершены"}
+{"level":"info","ts":1764232366.136107,"caller":"0s5/main.go:390","msg":"Остановка механизма периодического переподключения SMPP..."}
+{"level":"info","ts":1764232366.136107,"caller":"0s5/main.go:393","msg":"Остановка механизма повторных попыток отправки SMS..."}
+{"level":"info","ts":1764232366.1366303,"caller":"0s5/main.go:396","msg":"Закрытие SMPP адаптеров..."}
+{"level":"info","ts":1764232366.141532,"caller":"0s5/main.go:401","msg":"Остановка механизма периодического переподключения к БД..."}
+{"level":"info","ts":1764232366.141532,"caller":"db/oracle_connector.go:349","msg":"Остановка механизма периодического переподключения к БД"}
+{"level":"info","ts":1764232366.141532,"caller":"0s5/main.go:404","msg":"Graceful shutdown завершен успешно"}
+{"level":"info","ts":1764232366.155486,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}
+{"level":"info","ts":1764232376.4829671,"caller":"logger/logger.go:89","msg":"Логгер инициализирован","logLevel":5,"maxArchiveFiles":10,"logDir":"logs"}
+{"level":"info","ts":1764232376.6493645,"caller":"db/oracle_connector.go:304","msg":"Database connection opened (using Oracle Instant Client via godror)"}
+{"level":"info","ts":1764232376.6493645,"caller":"0s5/main.go:63","msg":"Успешно подключено к Oracle базе данных"}
+{"level":"info","ts":1764232376.6493645,"caller":"db/oracle_connector.go:328","msg":"Запущен механизм периодического переподключения к БД","interval":1800}
+{"level":"info","ts":1764232376.6498685,"caller":"0s5/main.go:73","msg":"Конфигурация SMS загружена","silent":false}
+{"level":"info","ts":1764232378.334535,"caller":"0s5/main.go:93","msg":"Настройки очереди","queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER"}
+{"level":"info","ts":1764232378.334535,"caller":"0s5/main.go:96","msg":"Начало работы с очередью Oracle AQ..."}
+{"level":"debug","ts":1764232378.33507,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764232388.4080982,"caller":"0s5/main.go:267","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764232388.9091418,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764232398.9727685,"caller":"0s5/main.go:267","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764232399.4736912,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"info","ts":1764232405.4615881,"caller":"0s5/main.go:54","msg":"Получен сигнал, инициируется graceful shutdown","signal":"interrupt"}
+{"level":"error","ts":1764232405.4803646,"caller":"db/queue_reader.go:314","msg":"Ошибка отката транзакции","error":"sql: transaction has already been committed or rolled back","stacktrace":"oracle-client/db.(*QueueReader).dequeueOneMessageWithTimeout\n\tB:/0s5/db/queue_reader.go:314\noracle-client/db.(*QueueReader).DequeueMany\n\tB:/0s5/db/queue_reader.go:127\nmain.runQueueProcessingLoop\n\tB:/0s5/main.go:244\nmain.main\n\tB:/0s5/main.go:182\nruntime.main\n\tB:/Go/GOPATH/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.windows-amd64/src/runtime/proc.go:285"}
+{"level":"error","ts":1764232405.4808974,"caller":"db/queue_reader.go:325","msg":"Ошибка выполнения PL/SQL для dequeue","error":"context canceled","consumer":"SUB_SMS_SENDER","queue":"ASKAQ.AQ_ASK","timeout":10,"stacktrace":"oracle-client/db.(*QueueReader).dequeueOneMessageWithTimeout\n\tB:/0s5/db/queue_reader.go:325\noracle-client/db.(*QueueReader).DequeueMany\n\tB:/0s5/db/queue_reader.go:127\nmain.runQueueProcessingLoop\n\tB:/0s5/main.go:244\nmain.main\n\tB:/0s5/main.go:182\nruntime.main\n\tB:/Go/GOPATH/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.windows-amd64/src/runtime/proc.go:285"}
+{"level":"info","ts":1764232405.4814196,"caller":"db/queue_reader.go:132","msg":"Операция чтения из очереди прервана из-за отмены контекста","received":0}
+{"level":"error","ts":1764232405.4814196,"caller":"0s5/main.go:249","msg":"Ошибка при выборке сообщений","error":"context canceled","stacktrace":"main.runQueueProcessingLoop\n\tB:/0s5/main.go:249\nmain.main\n\tB:/0s5/main.go:182\nruntime.main\n\tB:/Go/GOPATH/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.windows-amd64/src/runtime/proc.go:285"}
+{"level":"info","ts":1764232405.4819472,"caller":"0s5/main.go:251","msg":"Ошибка соединения, переподключение..."}
+{"level":"info","ts":1764232405.4819472,"caller":"0s5/main.go:385","msg":"Начало graceful shutdown..."}
+{"level":"info","ts":1764232405.4819472,"caller":"0s5/main.go:386","msg":"Ожидание завершения всех обработчиков сообщений..."}
+{"level":"info","ts":1764232405.4819472,"caller":"0s5/main.go:388","msg":"Все обработчики сообщений завершены"}
+{"level":"info","ts":1764232405.4824533,"caller":"0s5/main.go:390","msg":"Остановка механизма периодического переподключения SMPP..."}
+{"level":"info","ts":1764232405.4824996,"caller":"0s5/main.go:393","msg":"Остановка механизма повторных попыток отправки SMS..."}
+{"level":"info","ts":1764232405.4824996,"caller":"0s5/main.go:396","msg":"Закрытие SMPP адаптеров..."}
+{"level":"info","ts":1764232405.4878309,"caller":"0s5/main.go:401","msg":"Остановка механизма периодического переподключения к БД..."}
+{"level":"info","ts":1764232405.4883573,"caller":"db/oracle_connector.go:349","msg":"Остановка механизма периодического переподключения к БД"}
+{"level":"info","ts":1764232405.4883573,"caller":"0s5/main.go:404","msg":"Graceful shutdown завершен успешно"}
+{"level":"info","ts":1764232405.4993932,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}

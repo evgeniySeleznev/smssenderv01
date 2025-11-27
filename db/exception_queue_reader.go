@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"oracle-client/logger"
 )
 
 // ExceptionQueueReader инкапсулирует работу с exception queue Oracle AQ
@@ -62,7 +65,10 @@ func (eqr *ExceptionQueueReader) DequeueMany(ctx context.Context, count int) ([]
 		// Проверяем контекст перед каждой итерацией для возможности прерывания
 		select {
 		case <-ctx.Done():
-			log.Printf("Операция чтения из exception queue прервана (получено %d сообщений)", len(messages))
+			if logger.Log != nil {
+				logger.Log.Info("Операция чтения из exception queue прервана",
+					zap.Int("received", len(messages)))
+			}
 			return messages, ctx.Err()
 		default:
 		}
@@ -71,7 +77,10 @@ func (eqr *ExceptionQueueReader) DequeueMany(ctx context.Context, count int) ([]
 		if err != nil {
 			// Если ошибка связана с отменой контекста, возвращаем частичный результат
 			if ctx.Err() != nil {
-				log.Printf("Операция чтения из exception queue прервана из-за отмены контекста (получено %d сообщений)", len(messages))
+				if logger.Log != nil {
+					logger.Log.Info("Операция чтения из exception queue прервана из-за отмены контекста",
+						zap.Int("received", len(messages)))
+				}
 				return messages, ctx.Err()
 			}
 			return messages, err
@@ -91,8 +100,11 @@ func (eqr *ExceptionQueueReader) DequeueMany(ctx context.Context, count int) ([]
 // НЕ использует consumer_name для exception queue
 // Принимает контекст для возможности отмены операций при graceful shutdown
 func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueMessage, error) {
-	log.Printf("Попытка извлечения сообщения из exception queue %s (timeout: %d сек)",
-		eqr.queueName, eqr.waitTimeout)
+	if logger.Log != nil {
+		logger.Log.Debug("Попытка извлечения сообщения из exception queue",
+			zap.String("queue", eqr.queueName),
+			zap.Int("timeout", eqr.waitTimeout))
+	}
 
 	// Создаем контекст с таймаутом для создания пакета (объединяем с переданным контекстом)
 	packageCtx, packageCancel := context.WithTimeout(ctx, execTimeout)
@@ -117,7 +129,9 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 	`
 	_, err := eqr.dbConn.db.ExecContext(packageCtx, createPackageSQL)
 	if err != nil {
-		log.Printf("Предупреждение: не удалось создать пакет (возможно, уже существует): %v", err)
+		if logger.Log != nil {
+			logger.Log.Debug("Не удалось создать пакет (возможно, уже существует)", zap.Error(err))
+		}
 	}
 
 	// Создаем тело пакета с реализацией функций
@@ -151,7 +165,9 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 	`
 	_, err = eqr.dbConn.db.ExecContext(packageCtx, createPackageBodySQL)
 	if err != nil {
-		log.Printf("Предупреждение: не удалось создать тело пакета (возможно, уже существует): %v", err)
+		if logger.Log != nil {
+			logger.Log.Debug("Не удалось создать тело пакета (возможно, уже существует)", zap.Error(err))
+		}
 	}
 
 	// PL/SQL блок для выполнения dequeue из exception queue
@@ -230,17 +246,23 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 
 	if err != nil {
 		// Откатываем транзакцию при ошибке
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		// Проверяем, не пуста ли очередь
 		errStr := err.Error()
 		if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
-			log.Printf("Exception queue пуста (код ошибки 25228)")
+			if logger.Log != nil {
+				logger.Log.Debug("Exception queue пуста (код ошибки 25228)")
+			}
 			return nil, nil
 		}
-		log.Printf("Ошибка выполнения PL/SQL для dequeue из exception queue: %v", err)
-		log.Printf("Детали ошибки: queue='%s', timeout=%d", eqr.queueName, eqr.waitTimeout)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка выполнения PL/SQL для dequeue из exception queue",
+				zap.Error(err),
+				zap.String("queue", eqr.queueName),
+				zap.Int("timeout", eqr.waitTimeout))
+		}
 		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
@@ -250,16 +272,16 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 	var errorMsg sql.NullString
 	err = tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, fmt.Errorf("ошибка проверки результата dequeue: %w", err)
 	}
 
 	// Если dequeue не удался (очередь пуста)
 	if !successFlag.Valid || successFlag.Int64 == 0 {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		if errorCode.Valid && errorCode.Int64 == -25228 {
 			return nil, nil // Очередь пуста
@@ -278,32 +300,34 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 
 	rows, err := tx.QueryContext(txCtx, query)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
-		log.Printf("Ошибка выполнения SELECT с XMLSerialize: %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка выполнения SELECT с XMLSerialize", zap.Error(err))
+		}
 		return nil, fmt.Errorf("ошибка выполнения SELECT с XMLSerialize: %w", err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, nil
 	}
 
 	var msgid, payload sql.NullString
 	if err := rows.Scan(&msgid, &payload); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, fmt.Errorf("ошибка чтения данных: %w", err)
 	}
 
 	if !payload.Valid || payload.String == "" {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, nil
 	}
@@ -327,7 +351,11 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 		DequeueTime: time.Now(),
 	}
 
-	log.Printf("Получено сообщение из exception queue. MessageID: %s, размер: %d байт", msg.MessageID, len(msg.RawPayload))
+	if logger.Log != nil {
+		logger.Log.Debug("Получено сообщение из exception queue",
+			zap.String("messageID", msg.MessageID),
+			zap.Int("size", len(msg.RawPayload)))
+	}
 	return msg, nil
 }
 

@@ -2,11 +2,14 @@ package sms
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"oracle-client/logger"
 )
 
 // SMSMessage представляет распарсенное сообщение из Oracle очереди
@@ -73,16 +76,25 @@ func (s *Service) InitializeAdapters() error {
 		return nil
 	}
 
-	log.Println("Инициализация SMPP адаптеров...")
+	if logger.Log != nil {
+		logger.Log.Info("Инициализация SMPP адаптеров...")
+	}
 
 	// Создаем адаптеры для всех настроенных SMPP провайдеров
 	for smppID, smppCfg := range s.cfg.SMPP {
-		log.Printf("Инициализация SMPP адаптера ID=%d (Host=%s:%d, User=%s)",
-			smppID, smppCfg.Host, smppCfg.Port, smppCfg.User)
+		if logger.Log != nil {
+			logger.Log.Info("Инициализация SMPP адаптера",
+				zap.Int("smppID", smppID),
+				zap.String("host", smppCfg.Host),
+				zap.Int("port", int(smppCfg.Port)),
+				zap.String("user", smppCfg.User))
+		}
 
 		adapter, err := NewSMPPAdapter(smppCfg)
 		if err != nil {
-			log.Printf("Ошибка создания адаптера для SMPP ID=%d: %v", smppID, err)
+			if logger.Log != nil {
+				logger.Log.Error("Ошибка создания адаптера для SMPP", zap.Int("smppID", smppID), zap.Error(err))
+			}
 			continue
 		}
 
@@ -92,19 +104,29 @@ func (s *Service) InitializeAdapters() error {
 		// Разблокируем перед вызовом Bind, чтобы избежать deadlock
 		s.mu.Unlock()
 		if !s.cfg.Mode.Silent {
-			log.Printf("Предварительное подключение SMPP ID=%d...", smppID)
+			if logger.Log != nil {
+				logger.Log.Info("Предварительное подключение SMPP", zap.Int("smppID", smppID))
+			}
 			if err := adapter.Bind(); err != nil {
-				log.Printf("Предупреждение: не удалось подключиться к SMPP ID=%d: %v (будет попытка при первой отправке)", smppID, err)
+				if logger.Log != nil {
+					logger.Log.Warn("Не удалось подключиться к SMPP (будет попытка при первой отправке)",
+						zap.Int("smppID", smppID),
+						zap.Error(err))
+				}
 				// Не возвращаем ошибку - соединение установится при первой отправке
 			} else {
-				log.Printf("SMPP адаптер ID=%d успешно подключен", smppID)
+				if logger.Log != nil {
+					logger.Log.Info("SMPP адаптер успешно подключен", zap.Int("smppID", smppID))
+				}
 			}
 		}
 		s.mu.Lock() // Блокируем обратно для следующей итерации или завершения
 	}
 
 	s.initialized = true
-	log.Println("Инициализация SMPP адаптеров завершена")
+	if logger.Log != nil {
+		logger.Log.Info("Инициализация SMPP адаптеров завершена")
+	}
 	s.mu.Unlock() // Разблокируем перед вызовом StartPeriodicRebind, чтобы избежать deadlock
 
 	// Запускаем механизм периодического переподключения (после разблокировки)
@@ -138,8 +160,11 @@ func (s *Service) StartPeriodicRebind() {
 	s.rebindTicker = time.NewTicker(checkInterval)
 	s.rebindWg.Add(1)
 
-	log.Printf("Запущен механизм периодического переподключения SMPP (проверка каждые %v, переподключение через %d минут)",
-		checkInterval, rebindIntervalMin)
+	if logger.Log != nil {
+		logger.Log.Info("Запущен механизм периодического переподключения SMPP",
+			zap.Duration("checkInterval", checkInterval),
+			zap.Uint("rebindIntervalMin", rebindIntervalMin))
+	}
 
 	go func() {
 		defer s.rebindWg.Done()
@@ -163,21 +188,30 @@ func (s *Service) StartPeriodicRebind() {
 						// Сначала проверяем реальное состояние соединения
 						// Если соединение разорвано, переподключаемся сразу
 						if !adapter.IsConnected() {
-							log.Printf("Обнаружено разорванное соединение для SMPP ID=%d, выполняется переподключение", smppID)
+							if logger.Log != nil {
+								logger.Log.Warn("Обнаружено разорванное соединение для SMPP, выполняется переподключение",
+									zap.Int("smppID", smppID))
+							}
 							if err := adapter.Bind(); err != nil {
-								log.Printf("Ошибка переподключения для SMPP ID=%d: %v", smppID, err)
+								if logger.Log != nil {
+									logger.Log.Error("Ошибка переподключения для SMPP", zap.Int("smppID", smppID), zap.Error(err))
+								}
 							}
 						} else {
 							// Соединение активно - проверяем время с последнего ответа для периодического Rebind
 							if !adapter.Rebind(rebindIntervalMin) {
-								log.Printf("Предупреждение: не удалось выполнить Rebind для SMPP ID=%d", smppID)
+								if logger.Log != nil {
+									logger.Log.Warn("Не удалось выполнить Rebind для SMPP", zap.Int("smppID", smppID))
+								}
 							}
 						}
 					}
 				}
 
 			case <-s.rebindStop:
-				log.Println("Остановка механизма периодического переподключения SMPP")
+				if logger.Log != nil {
+					logger.Log.Info("Остановка механизма периодического переподключения SMPP")
+				}
 				return
 			}
 		}
@@ -213,10 +247,14 @@ func (s *Service) Close() error {
 	for id, adapter := range s.adapters {
 		if adapter != nil {
 			if err := adapter.Close(); err != nil {
-				log.Printf("Ошибка закрытия SMPP адаптера ID=%d: %v", id, err)
+				if logger.Log != nil {
+					logger.Log.Error("Ошибка закрытия SMPP адаптера", zap.Int("smppID", id), zap.Error(err))
+				}
 				lastErr = err
 			} else {
-				log.Printf("SMPP адаптер ID=%d закрыт", id)
+				if logger.Log != nil {
+					logger.Log.Info("SMPP адаптер закрыт", zap.Int("smppID", id))
+				}
 			}
 		}
 	}
@@ -240,7 +278,9 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 
 	if !ok {
 		errText := fmt.Sprintf("SMS не отправлено: нет данных для указанного SMPP (ID=%d)", msg.SMPPID)
-		log.Printf("Ошибка: %s", errText)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка: нет данных для указанного SMPP", zap.Int("smppID", msg.SMPPID))
+		}
 		return &SMSResponse{
 			TaskID:    msg.TaskID,
 			MessageID: "",
@@ -254,7 +294,9 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 	if msg.SendingSchedule {
 		if err := s.checkSchedule(msg.DateActiveFrom); err != nil {
 			errText := err.Error()
-			log.Printf("Ошибка расписания: %s", errText)
+			if logger.Log != nil {
+				logger.Log.Error("Ошибка расписания", zap.Error(err))
+			}
 			return &SMSResponse{
 				TaskID:    msg.TaskID,
 				MessageID: "",
@@ -276,7 +318,9 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 			testNumber, err := getTestPhone()
 			if err != nil {
 				errText := fmt.Sprintf("Ошибка получения тестового номера: %v", err)
-				log.Printf("%s", errText)
+				if logger.Log != nil {
+					logger.Log.Error(errText)
+				}
 				return &SMSResponse{
 					TaskID:    msg.TaskID,
 					MessageID: "",
@@ -288,7 +332,9 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 
 			if strings.TrimSpace(testNumber) == "" {
 				errText := "Режим Debug: тестовый номер отсутствует, SMS не отправляется"
-				log.Printf("%s", errText)
+				if logger.Log != nil {
+					logger.Log.Warn(errText)
+				}
 				return &SMSResponse{
 					TaskID:    msg.TaskID,
 					MessageID: "",
@@ -298,10 +344,17 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 				}, nil
 			}
 
-			log.Printf("Режим Debug: номер %s заменен на тестовый номер %s", phoneNumber, testNumber)
+			if logger.Log != nil {
+				logger.Log.Debug("Режим Debug: номер заменен на тестовый",
+					zap.String("original", phoneNumber),
+					zap.String("test", testNumber))
+			}
 			phoneNumber = testNumber
 		} else {
-			log.Printf("Режим Debug: функция получения тестового номера не установлена, используется исходный номер %s", phoneNumber)
+			if logger.Log != nil {
+				logger.Log.Debug("Режим Debug: функция получения тестового номера не установлена, используется исходный номер",
+					zap.String("phone", phoneNumber))
+			}
 		}
 	}
 
@@ -310,7 +363,11 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 	if err != nil {
 		// Проверяем, является ли это ошибкой SMPP провайдера
 		if s.isSMPPProviderError(err) {
-			log.Printf("Ошибка SMPP провайдера при отправке SMS (TaskID=%d): %v, отправка в очередь повторных попыток", msg.TaskID, err)
+			if logger.Log != nil {
+				logger.Log.Warn("Ошибка SMPP провайдера при отправке SMS, отправка в очередь повторных попыток",
+					zap.Int64("taskID", msg.TaskID),
+					zap.Error(err))
+			}
 			// Отправляем в очередь повторных попыток
 			s.enqueueForRetry(msg, err)
 			// Возвращаем статус ошибки, так как сообщение будет отправлено повторно (до 10 попыток)
@@ -324,7 +381,9 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 		}
 		// Это не ошибка SMPP провайдера - возвращаем ошибку без повторных попыток
 		errText := fmt.Sprintf("Ошибка отправки абоненту: %v", err)
-		log.Printf("Ошибка отправки SMS: %s", errText)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка отправки SMS", zap.String("error", errText))
+		}
 		return &SMSResponse{
 			TaskID:    msg.TaskID,
 			MessageID: "",
@@ -335,8 +394,13 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 	}
 
 	// Успешная отправка
-	log.Printf("SMS успешно отправлено: TaskID=%d, MessageID=%s, Phone=%s, Sender=%s",
-		msg.TaskID, messageID, phoneNumber, msg.SenderName)
+	if logger.Log != nil {
+		logger.Log.Info("SMS успешно отправлено",
+			zap.Int64("taskID", msg.TaskID),
+			zap.String("messageID", messageID),
+			zap.String("phone", phoneNumber),
+			zap.String("sender", msg.SenderName))
+	}
 
 	return &SMSResponse{
 		TaskID:    msg.TaskID,
@@ -351,14 +415,16 @@ func (s *Service) ProcessSMS(msg SMSMessage) (*SMSResponse, error) {
 func (s *Service) sendSMS(msg SMSMessage, smppCfg *SMPPConfig, phoneNumber string) (string, error) {
 	// Режим Silent - не отправляем реально, только логируем
 	if s.cfg.Mode.Silent {
-		log.Printf("[SILENT MODE] SMS не отправляется реально. Параметры:")
-		log.Printf("  TaskID: %d", msg.TaskID)
-		log.Printf("  Phone: +7%s", phoneNumber)
-		log.Printf("  Message: %s", msg.Message)
-		log.Printf("  Sender: %s", msg.SenderName)
-		log.Printf("  SMPP ID: %d", msg.SMPPID)
-		log.Printf("  SMPP Host: %s:%d", smppCfg.Host, smppCfg.Port)
-		log.Printf("  SMPP User: %s", smppCfg.User)
+		if logger.Log != nil {
+			logger.Log.Info("[SILENT MODE] SMS не отправляется реально",
+				zap.Int64("taskID", msg.TaskID),
+				zap.String("phone", "+7"+phoneNumber),
+				zap.String("message", msg.Message),
+				zap.String("sender", msg.SenderName),
+				zap.Int("smppID", msg.SMPPID),
+				zap.String("smppHost", fmt.Sprintf("%s:%d", smppCfg.Host, smppCfg.Port)),
+				zap.String("smppUser", smppCfg.User))
+		}
 
 		// Генерируем фиктивный MessageID для логирования
 		messageID := fmt.Sprintf("silent-%d-%d", msg.TaskID, time.Now().Unix())
@@ -366,12 +432,14 @@ func (s *Service) sendSMS(msg SMSMessage, smppCfg *SMPPConfig, phoneNumber strin
 	}
 
 	// Реальная отправка через SMPP библиотеку
-	log.Printf("[REAL MODE] Отправка SMS через SMPP")
-	log.Printf("  TaskID: %d", msg.TaskID)
-	log.Printf("  Phone: +7%s", phoneNumber)
-	log.Printf("  Message: %s", msg.Message)
-	log.Printf("  Sender: %s", msg.SenderName)
-	log.Printf("  SMPP Host: %s:%d", smppCfg.Host, smppCfg.Port)
+	if logger.Log != nil {
+		logger.Log.Debug("[REAL MODE] Отправка SMS через SMPP",
+			zap.Int64("taskID", msg.TaskID),
+			zap.String("phone", "+7"+phoneNumber),
+			zap.String("message", msg.Message),
+			zap.String("sender", msg.SenderName),
+			zap.String("smppHost", fmt.Sprintf("%s:%d", smppCfg.Host, smppCfg.Port)))
+	}
 
 	// Получаем или создаем адаптер для данного SMPP провайдера
 	adapter, err := s.getOrCreateAdapter(msg.SMPPID, smppCfg)
@@ -385,8 +453,13 @@ func (s *Service) sendSMS(msg SMSMessage, smppCfg *SMPPConfig, phoneNumber strin
 		return "", fmt.Errorf("ошибка отправки SMS: %w", err)
 	}
 
-	log.Printf("SMS отправлено: Sender: %s, Number: %s, Text: %s, MessageId: %s",
-		msg.SenderName, phoneNumber, msg.Message, messageID)
+	if logger.Log != nil {
+		logger.Log.Debug("SMS отправлено",
+			zap.String("sender", msg.SenderName),
+			zap.String("number", phoneNumber),
+			zap.String("text", msg.Message),
+			zap.String("messageID", messageID))
+	}
 
 	return messageID, nil
 }
@@ -402,7 +475,9 @@ func (s *Service) EnsureSMPPConnectivity() bool {
 	s.mu.RUnlock()
 
 	if len(adaptersCopy) == 0 {
-		log.Println("Проверка подключения к SMPP: нет инициализированных SMPP адаптеров")
+		if logger.Log != nil {
+			logger.Log.Warn("Проверка подключения к SMPP: нет инициализированных SMPP адаптеров")
+		}
 		return false
 	}
 
@@ -414,16 +489,22 @@ func (s *Service) EnsureSMPPConnectivity() bool {
 			return true
 		}
 
-		log.Printf("Проверка подключения к SMPP: SMPP ID=%d не подключен, попытка Bind...", smppID)
+		if logger.Log != nil {
+			logger.Log.Debug("Проверка подключения к SMPP: SMPP не подключен, попытка Bind", zap.Int("smppID", smppID))
+		}
 		if err := adapter.Bind(); err != nil {
-			log.Printf("Проверка подключения к SMPP: не удалось подключиться к SMPP ID=%d: %v", smppID, err)
+			if logger.Log != nil {
+				logger.Log.Warn("Проверка подключения к SMPP: не удалось подключиться", zap.Int("smppID", smppID), zap.Error(err))
+			}
 			continue
 		}
 
 		return true
 	}
 
-	log.Println("Проверка подключения к SMPP: ни один SMPP адаптер не доступен")
+	if logger.Log != nil {
+		logger.Log.Warn("Проверка подключения к SMPP: ни один SMPP адаптер не доступен")
+	}
 	return false
 }
 
@@ -446,7 +527,9 @@ func (s *Service) getOrCreateAdapter(smppID int, smppCfg *SMPPConfig) (*SMPPAdap
 		return adapter, nil
 	}
 
-	log.Printf("Создание нового адаптера для SMPP ID=%d (не был инициализирован заранее)", smppID)
+	if logger.Log != nil {
+		logger.Log.Info("Создание нового адаптера для SMPP (не был инициализирован заранее)", zap.Int("smppID", smppID))
+	}
 	adapter, err := NewSMPPAdapter(smppCfg)
 	if err != nil {
 		return nil, err
@@ -557,7 +640,9 @@ func ParseSMSMessage(parsed map[string]interface{}) (*SMSMessage, error) {
 		}
 
 		if !parsed {
-			log.Printf("Предупреждение: не удалось распарсить date_active_from: %s, ошибка: %v", dateActiveFromStr, err)
+			if logger.Log != nil {
+				logger.Log.Warn("Не удалось распарсить date_active_from", zap.String("dateActiveFrom", dateActiveFromStr), zap.Error(err))
+			}
 		}
 	}
 

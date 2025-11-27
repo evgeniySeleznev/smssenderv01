@@ -2,11 +2,14 @@ package sms
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"oracle-client/logger"
 )
 
 var (
@@ -80,7 +83,11 @@ func (s *Service) enqueueForRetry(msg SMSMessage, err error) {
 	queueLen := len(s.retryQueue)
 	s.retryQueueMu.Unlock()
 
-	log.Printf("Сообщение (TaskID=%d) добавлено в очередь повторных попыток (всего в очереди: %d)", msg.TaskID, queueLen)
+	if logger.Log != nil {
+		logger.Log.Debug("Сообщение добавлено в очередь повторных попыток",
+			zap.Int64("taskID", msg.TaskID),
+			zap.Int("queueLen", queueLen))
+	}
 }
 
 // calculateNextRetryDelay вычисляет задержку до следующей попытки
@@ -158,7 +165,9 @@ func (s *Service) StartRetryWorker() {
 	s.retryStarted = true
 
 	s.retryWg.Add(1)
-	log.Println("Запущен механизм повторных попыток отправки SMS")
+	if logger.Log != nil {
+		logger.Log.Info("Запущен механизм повторных попыток отправки SMS")
+	}
 
 	go func() {
 		defer s.retryWg.Done()
@@ -173,7 +182,9 @@ func (s *Service) StartRetryWorker() {
 		for {
 			select {
 			case <-s.retryStop:
-				log.Println("Остановка механизма повторных попыток отправки SMS")
+				if logger.Log != nil {
+					logger.Log.Info("Остановка механизма повторных попыток отправки SMS")
+				}
 				return
 
 			case <-ticker.C:
@@ -189,7 +200,9 @@ func (s *Service) StartRetryWorker() {
 				// Добавляем новые сообщения в pendingRetries
 				if len(newMessages) > 0 {
 					pendingRetries = append(pendingRetries, newMessages...)
-					log.Printf("Загружено %d новых сообщений из очереди повторных попыток", len(newMessages))
+					if logger.Log != nil {
+						logger.Log.Debug("Загружено новых сообщений из очереди повторных попыток", zap.Int("count", len(newMessages)))
+					}
 				}
 
 				// Проверяем сообщения, готовые к повторной попытке
@@ -204,8 +217,12 @@ func (s *Service) StartRetryWorker() {
 					}
 
 					retryMsg.RetryCount++
-					log.Printf("Повторная попытка отправки SMS (TaskID=%d, попытка %d/%d)",
-						retryMsg.Message.TaskID, retryMsg.RetryCount, 10)
+					if logger.Log != nil {
+						logger.Log.Info("Повторная попытка отправки SMS",
+							zap.Int64("taskID", retryMsg.Message.TaskID),
+							zap.Int("retryCount", retryMsg.RetryCount),
+							zap.Int("maxRetries", 10))
+					}
 
 					// Получаем конфигурацию SMPP
 					s.mu.RLock()
@@ -216,19 +233,30 @@ func (s *Service) StartRetryWorker() {
 						// Конфигурация не найдена - обрабатываем как ошибку SMPP провайдера
 						// Пробуем еще раз (до 10 попыток), как и с другими ошибками отправки
 						err := fmt.Errorf("SMPP конфигурация не найдена для ID=%d", retryMsg.Message.SMPPID)
-						log.Printf("Повторная попытка неудачна (TaskID=%d, попытка %d/%d): %v",
-							retryMsg.Message.TaskID, retryMsg.RetryCount, 10, err)
+						if logger.Log != nil {
+							logger.Log.Warn("Повторная попытка неудачна",
+								zap.Int64("taskID", retryMsg.Message.TaskID),
+								zap.Int("retryCount", retryMsg.RetryCount),
+								zap.Int("maxRetries", 10),
+								zap.Error(err))
+						}
 
 						// Вычисляем задержку до следующей попытки
 						delay, shouldRetry := calculateNextRetryDelay(retryMsg.RetryCount, retryMsg.CreatedAt)
 						if !shouldRetry {
-							log.Printf("ПРЕКРАЩЕНИЕ повторных попыток для SMS (TaskID=%d): превышен лимит попыток (%d) или время (создано: %v)",
-								retryMsg.Message.TaskID, retryMsg.RetryCount, retryMsg.CreatedAt)
+							if logger.Log != nil {
+								logger.Log.Warn("ПРЕКРАЩЕНИЕ повторных попыток для SMS: превышен лимит попыток или время",
+									zap.Int64("taskID", retryMsg.Message.TaskID),
+									zap.Int("retryCount", retryMsg.RetryCount),
+									zap.Time("createdAt", retryMsg.CreatedAt))
+							}
 							continue // Теряем сообщение
 						}
 
 						retryMsg.NextRetryAt = now.Add(delay)
-						log.Printf("Следующая попытка через %v", delay)
+						if logger.Log != nil {
+							logger.Log.Debug("Следующая попытка через", zap.Duration("delay", delay))
+						}
 						remainingRetries = append(remainingRetries, retryMsg)
 						continue
 					}
@@ -256,24 +284,42 @@ func (s *Service) StartRetryWorker() {
 							// Вычисляем задержку до следующей попытки
 							delay, shouldRetry := calculateNextRetryDelay(retryMsg.RetryCount, retryMsg.CreatedAt)
 							if !shouldRetry {
-								log.Printf("ПРЕКРАЩЕНИЕ повторных попыток для SMS (TaskID=%d): превышен лимит попыток (%d) или время (создано: %v)",
-									retryMsg.Message.TaskID, retryMsg.RetryCount, retryMsg.CreatedAt)
+								if logger.Log != nil {
+									logger.Log.Warn("ПРЕКРАЩЕНИЕ повторных попыток для SMS: превышен лимит попыток или время",
+										zap.Int64("taskID", retryMsg.Message.TaskID),
+										zap.Int("retryCount", retryMsg.RetryCount),
+										zap.Time("createdAt", retryMsg.CreatedAt))
+								}
 								continue // Теряем сообщение
 							}
 
 							retryMsg.NextRetryAt = now.Add(delay)
-							log.Printf("Повторная попытка неудачна (TaskID=%d, попытка %d/%d): %v. Следующая попытка через %v",
-								retryMsg.Message.TaskID, retryMsg.RetryCount, 10, err, delay)
+							if logger.Log != nil {
+								logger.Log.Warn("Повторная попытка неудачна, следующая попытка через",
+									zap.Int64("taskID", retryMsg.Message.TaskID),
+									zap.Int("retryCount", retryMsg.RetryCount),
+									zap.Int("maxRetries", 10),
+									zap.Error(err),
+									zap.Duration("nextRetryDelay", delay))
+							}
 							remainingRetries = append(remainingRetries, retryMsg)
 						} else {
 							// Это не ошибка SMPP провайдера - прекращаем повторные попытки
-							log.Printf("ПРЕКРАЩЕНИЕ повторных попыток для SMS (TaskID=%d): ошибка не связана с SMPP провайдером: %v",
-								retryMsg.Message.TaskID, err)
+							if logger.Log != nil {
+								logger.Log.Warn("ПРЕКРАЩЕНИЕ повторных попыток для SMS: ошибка не связана с SMPP провайдером",
+									zap.Int64("taskID", retryMsg.Message.TaskID),
+									zap.Error(err))
+							}
 						}
 					} else {
 						// Успешная отправка
-						log.Printf("ПОВТОРНАЯ ОТПРАВКА УСПЕШНА (TaskID=%d, попытка %d/%d): MessageID=%s",
-							retryMsg.Message.TaskID, retryMsg.RetryCount, 10, messageID)
+						if logger.Log != nil {
+							logger.Log.Info("ПОВТОРНАЯ ОТПРАВКА УСПЕШНА",
+								zap.Int64("taskID", retryMsg.Message.TaskID),
+								zap.Int("retryCount", retryMsg.RetryCount),
+								zap.Int("maxRetries", 10),
+								zap.String("messageID", messageID))
+						}
 						// Не добавляем в remainingRetries - сообщение успешно отправлено
 					}
 				}
