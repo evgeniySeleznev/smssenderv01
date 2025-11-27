@@ -24,12 +24,9 @@ type SMPPConfig struct {
 
 // ScheduleConfig представляет конфигурацию расписания
 type ScheduleConfig struct {
-	TimeStart      time.Time
-	TimeEnd        time.Time
-	RebindSMPPMin  uint
-	ReloadQueueMin uint
-	RebuildQueue   bool
-	RebindOnClose  bool
+	TimeStart     time.Time
+	TimeEnd       time.Time
+	RebindSMPPMin uint
 }
 
 // ModeConfig представляет режимы работы
@@ -123,12 +120,9 @@ func LoadConfig(cfg *ini.File) (*Config, error) {
 		}
 
 		config.Schedule = ScheduleConfig{
-			TimeStart:      timeStart,
-			TimeEnd:        timeEnd,
-			RebindSMPPMin:  uint(scheduleSection.Key("RebindSMPPMin").MustInt(0)),
-			ReloadQueueMin: uint(scheduleSection.Key("ReloadQueueMin").MustInt(0)),
-			RebuildQueue:   scheduleSection.Key("RebuildQueue").MustBool(false),
-			RebindOnClose:  scheduleSection.Key("RebindOnClose").MustBool(false),
+			TimeStart:     timeStart,
+			TimeEnd:       timeEnd,
+			RebindSMPPMin: uint(scheduleSection.Key("RebindSMPPMin").MustInt(0)),
 		}
 	}
 
