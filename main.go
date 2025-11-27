@@ -91,6 +91,33 @@ func main() {
 		logger.Log.Info("Адаптеры будут инициализированы при первой отправке SMS")
 	}
 
+	// Устанавливаем callback для сохранения результатов отложенных SMS в БД
+	smsService.SetSaveCallback(func(response *sms.SMSResponse) {
+		if response == nil {
+			return
+		}
+		saveParams := db.SaveSmsResponseParams{
+			TaskID:       response.TaskID,
+			MessageID:    response.MessageID,
+			StatusID:     response.Status,
+			ResponseDate: response.SentAt,
+			ErrorText:    response.ErrorText,
+		}
+		if success, err := dbConn.SaveSmsResponse(context.Background(), saveParams); !success {
+			if err != nil {
+				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД",
+					zap.Int64("taskID", response.TaskID),
+					zap.Error(err))
+			}
+		} else {
+			logger.Log.Debug("Результат отложенного SMS сохранен в БД",
+				zap.Int64("taskID", response.TaskID))
+		}
+	})
+
+	// Запускаем очередь отложенных сообщений
+	smsService.StartScheduledQueue(ctx)
+
 	// Создаем QueueReader
 	queueReader, err := db.NewQueueReader(dbConn)
 	if err != nil {
@@ -187,6 +214,15 @@ func main() {
 			// Обрабатываем и отправляем SMS
 			// Передаем контекст для возможности отмены при graceful shutdown
 			response, err := smsService.ProcessSMS(ctx, *smsMsg)
+
+			// Проверяем, было ли сообщение отложено (schedule=1 вне окна расписания)
+			// В этом случае ProcessSMS возвращает nil, nil - сообщение будет отправлено позже
+			if response == nil && err == nil {
+				logger.Log.Debug("SMS добавлено в очередь отложенных, пропускаем",
+					zap.Int64("taskID", smsMsg.TaskID))
+				continue
+			}
+
 			if err != nil {
 				// Проверяем, была ли операция отменена из-за graceful shutdown
 				if ctx.Err() == context.Canceled {
@@ -528,6 +564,15 @@ func runQueueProcessingLoop(
 						// Обрабатываем и отправляем SMS из exception queue
 						// Передаем контекст для возможности отмены при graceful shutdown
 						response, err := smsService.ProcessSMS(ctx, *smsMsg)
+
+						// Проверяем, было ли сообщение отложено (schedule=1 вне окна расписания)
+						// В этом случае ProcessSMS возвращает nil, nil - сообщение будет отправлено позже
+						if response == nil && err == nil {
+							logger.Log.Debug("SMS из exception queue добавлено в очередь отложенных, пропускаем",
+								zap.Int64("taskID", smsMsg.TaskID))
+							continue
+						}
+
 						if err != nil {
 							// Проверяем, была ли операция отменена из-за graceful shutdown
 							if ctx.Err() == context.Canceled {
@@ -700,6 +745,10 @@ shutdown:
 
 	logger.Log.Info("Остановка механизма повторных попыток отправки SMS...")
 	smsService.StopRetryWorker()
+
+	logger.Log.Info("Остановка очереди отложенных SMS...",
+		zap.Int("scheduledQueueSize", smsService.GetScheduledQueueSize()))
+	smsService.StopScheduledQueue()
 
 	logger.Log.Info("Закрытие SMPP адаптеров...")
 	if err := smsService.Close(); err != nil {

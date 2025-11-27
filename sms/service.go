@@ -36,27 +36,32 @@ type SMSResponse struct {
 // TestPhoneGetter представляет функцию для получения тестового номера телефона
 type TestPhoneGetter func() (string, error)
 
+// SaveResponseCallback - callback для сохранения результата отправки SMS в БД
+type SaveResponseCallback func(response *SMSResponse)
+
 // Service представляет сервис для отправки SMS
 type Service struct {
-	cfg          *Config
-	mu           sync.RWMutex
-	lastActivity map[int]time.Time    // Последняя активность по каждому SMPP провайдеру
-	getTestPhone TestPhoneGetter      // Функция для получения тестового номера (опционально)
-	adapters     map[int]*SMPPAdapter // Кэш адаптеров по SMPP ID
-	initialized  bool                 // Флаг инициализации адаптеров
-	rebindTicker *time.Ticker         // Таймер для периодического переподключения
-	rebindStop   chan struct{}        // Канал для остановки переподключения
-	rebindWg     sync.WaitGroup       // WaitGroup для ожидания завершения горутины переподключения
-	retryQueue   []*RetryMessage      // Очередь сообщений для повторной отправки (неограниченная)
-	retryQueueMu sync.Mutex           // Мьютекс для защиты очереди повторных попыток
-	retryWg      sync.WaitGroup       // WaitGroup для ожидания завершения горутины повторных попыток
-	retryStop    chan struct{}        // Канал для остановки механизма повторных попыток
-	retryStarted bool                 // Флаг запуска механизма повторных попыток
+	cfg            *Config
+	mu             sync.RWMutex
+	lastActivity   map[int]time.Time    // Последняя активность по каждому SMPP провайдеру
+	getTestPhone   TestPhoneGetter      // Функция для получения тестового номера (опционально)
+	adapters       map[int]*SMPPAdapter // Кэш адаптеров по SMPP ID
+	initialized    bool                 // Флаг инициализации адаптеров
+	rebindTicker   *time.Ticker         // Таймер для периодического переподключения
+	rebindStop     chan struct{}        // Канал для остановки переподключения
+	rebindWg       sync.WaitGroup       // WaitGroup для ожидания завершения горутины переподключения
+	retryQueue     []*RetryMessage      // Очередь сообщений для повторной отправки (неограниченная)
+	retryQueueMu   sync.Mutex           // Мьютекс для защиты очереди повторных попыток
+	retryWg        sync.WaitGroup       // WaitGroup для ожидания завершения горутины повторных попыток
+	retryStop      chan struct{}        // Канал для остановки механизма повторных попыток
+	retryStarted   bool                 // Флаг запуска механизма повторных попыток
+	scheduledQueue *ScheduledQueue      // Очередь отложенных сообщений (для schedule=1 вне окна)
+	saveCallback   SaveResponseCallback // Callback для сохранения результата в БД
 }
 
 // NewService создает новый сервис отправки SMS
 func NewService(cfg *Config) *Service {
-	return &Service{
+	s := &Service{
 		cfg:          cfg,
 		lastActivity: make(map[int]time.Time),
 		getTestPhone: nil, // По умолчанию не установлена
@@ -66,6 +71,24 @@ func NewService(cfg *Config) *Service {
 		retryQueue:   make([]*RetryMessage, 0), // Неограниченная очередь для повторных попыток
 		retryStop:    make(chan struct{}),
 	}
+	// Создаем очередь отложенных сообщений
+	s.scheduledQueue = NewScheduledQueue(cfg, s)
+	return s
+}
+
+// SetSaveCallback устанавливает callback для сохранения результата SMS в БД
+// Используется очередью отложенных сообщений для сохранения результатов
+func (s *Service) SetSaveCallback(callback SaveResponseCallback) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saveCallback = callback
+}
+
+// GetSaveCallback возвращает callback для сохранения результата SMS в БД
+func (s *Service) GetSaveCallback() SaveResponseCallback {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.saveCallback
 }
 
 // InitializeAdapters инициализирует все SMPP адаптеры и устанавливает соединения заранее
@@ -137,6 +160,29 @@ func (s *Service) InitializeAdapters() error {
 	s.StartRetryWorker()
 
 	return nil
+}
+
+// StartScheduledQueue запускает горутину обработки отложенных сообщений
+// ctx - контекст для graceful shutdown
+func (s *Service) StartScheduledQueue(ctx context.Context) {
+	if s.scheduledQueue != nil {
+		s.scheduledQueue.Start(ctx)
+	}
+}
+
+// StopScheduledQueue останавливает горутину обработки отложенных сообщений
+func (s *Service) StopScheduledQueue() {
+	if s.scheduledQueue != nil {
+		s.scheduledQueue.Stop()
+	}
+}
+
+// GetScheduledQueueSize возвращает количество сообщений в очереди отложенных
+func (s *Service) GetScheduledQueueSize() int {
+	if s.scheduledQueue != nil {
+		return s.scheduledQueue.GetQueueSize()
+	}
+	return 0
 }
 
 // StartPeriodicRebind запускает горутину для периодического переподключения SMPP адаптеров
@@ -240,6 +286,9 @@ func (s *Service) Close() error {
 	// Останавливаем механизм повторных попыток
 	s.StopRetryWorker()
 
+	// Останавливаем очередь отложенных сообщений
+	s.StopScheduledQueue()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -300,6 +349,18 @@ func (s *Service) ProcessSMS(ctx context.Context, msg SMSMessage) (*SMSResponse,
 	// Проверка расписания (если требуется)
 	if msg.SendingSchedule {
 		if err := s.checkSchedule(msg.DateActiveFrom); err != nil {
+			// Вместо возврата ошибки добавляем сообщение в очередь отложенных
+			if s.scheduledQueue != nil {
+				if logger.Log != nil {
+					logger.Log.Info("SMS добавлено в очередь отложенных (вне окна расписания)",
+						zap.Int64("taskID", msg.TaskID),
+						zap.String("reason", err.Error()))
+				}
+				s.scheduledQueue.Enqueue(msg, err.Error())
+				// Возвращаем nil, nil чтобы не сохранять в БД - сообщение будет обработано позже
+				return nil, nil
+			}
+			// Если очередь не инициализирована - возвращаем ошибку как раньше
 			errText := err.Error()
 			if logger.Log != nil {
 				logger.Log.Error("Ошибка расписания", zap.Error(err))
