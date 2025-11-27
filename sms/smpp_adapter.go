@@ -55,29 +55,45 @@ type DeliveryReceipt struct {
 	StatusID           int       // Статус для сохранения в БД (2, 3 или 4)
 }
 
-// DeliveryReceiptCallback - callback для обработки delivery receipt
+// DeliveryReceiptCallback - callback для обработки одиночного delivery receipt
 type DeliveryReceiptCallback func(receipt *DeliveryReceipt)
+
+// BatchDeliveryReceiptCallback - callback для batch-обработки delivery receipts
+type BatchDeliveryReceiptCallback func(receipts []*DeliveryReceipt) int
+
+// Константы для буферной очереди delivery receipts
+const (
+	deliveryReceiptQueueSize    = 1000            // Размер буфера очереди
+	deliveryReceiptBatchSize    = 50              // Размер batch для сохранения
+	deliveryReceiptBatchTimeout = 2 * time.Second // Таймаут для сбора batch
+)
 
 // SMPPAdapter представляет адаптер для работы с SMPP протоколом
 type SMPPAdapter struct {
-	client                  *smpp.Transceiver
-	config                  *SMPPConfig
-	mu                      sync.Mutex
-	lastAnswerTime          time.Time
-	statusChan              <-chan smpp.ConnStatus
-	isConnected             bool                    // Флаг подключения
-	lastBindAttempt         time.Time               // Время последней попытки Bind
-	consecutiveFailures     int                     // Количество последовательных неудачных попыток
-	lastRebindLogTime       time.Time               // Время последнего логирования перед rebind
-	deliveryReceiptCallback DeliveryReceiptCallback // Callback для обработки delivery receipt
-	deliveryReceiptWg       sync.WaitGroup          // WaitGroup для ожидания завершения обработки receipts
+	client                       *smpp.Transceiver
+	config                       *SMPPConfig
+	mu                           sync.Mutex
+	lastAnswerTime               time.Time
+	statusChan                   <-chan smpp.ConnStatus
+	isConnected                  bool                         // Флаг подключения
+	lastBindAttempt              time.Time                    // Время последней попытки Bind
+	consecutiveFailures          int                          // Количество последовательных неудачных попыток
+	lastRebindLogTime            time.Time                    // Время последнего логирования перед rebind
+	deliveryReceiptCallback      DeliveryReceiptCallback      // Callback для обработки одиночного receipt (deprecated)
+	batchDeliveryReceiptCallback BatchDeliveryReceiptCallback // Callback для batch-обработки receipts
+	deliveryReceiptWg            sync.WaitGroup               // WaitGroup для ожидания завершения обработки receipts
+	deliveryReceiptQueue         chan *DeliveryReceipt        // Буферная очередь для delivery receipts
+	receiptWorkerStop            chan struct{}                // Канал для остановки воркера очереди
+	receiptWorkerRunning         bool                         // Флаг работы воркера
 }
 
 // NewSMPPAdapter создает новый SMPP адаптер
 func NewSMPPAdapter(cfg *SMPPConfig) (*SMPPAdapter, error) {
 	adapter := &SMPPAdapter{
-		config:         cfg,
-		lastAnswerTime: time.Now(),
+		config:               cfg,
+		lastAnswerTime:       time.Now(),
+		deliveryReceiptQueue: make(chan *DeliveryReceipt, deliveryReceiptQueueSize),
+		receiptWorkerStop:    make(chan struct{}),
 	}
 
 	// Инициализация клиента с параметрами из руководства
@@ -112,11 +128,176 @@ func (a *SMPPAdapter) createClient() {
 	}
 }
 
-// SetDeliveryReceiptCallback устанавливает callback для обработки delivery receipts
+// SetDeliveryReceiptCallback устанавливает callback для обработки одиночных delivery receipts
+// Deprecated: используйте SetBatchDeliveryReceiptCallback для лучшей производительности
 func (a *SMPPAdapter) SetDeliveryReceiptCallback(callback DeliveryReceiptCallback) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.deliveryReceiptCallback = callback
+}
+
+// SetBatchDeliveryReceiptCallback устанавливает callback для batch-обработки delivery receipts
+// Batch формируется по 50 receipts или каждые 2 секунды (что раньше)
+func (a *SMPPAdapter) SetBatchDeliveryReceiptCallback(callback BatchDeliveryReceiptCallback) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.batchDeliveryReceiptCallback = callback
+}
+
+// StartDeliveryReceiptWorker запускает горутину для batch-обработки очереди delivery receipts
+// Собирает batch по 50 receipts или каждые 2 секунды (что раньше)
+func (a *SMPPAdapter) StartDeliveryReceiptWorker() {
+	a.mu.Lock()
+	if a.receiptWorkerRunning {
+		a.mu.Unlock()
+		return
+	}
+	a.receiptWorkerRunning = true
+	a.mu.Unlock()
+
+	if logger.Log != nil {
+		logger.Log.Info("Запуск воркера обработки delivery receipts (batch mode)",
+			zap.Int("queueSize", deliveryReceiptQueueSize),
+			zap.Int("batchSize", deliveryReceiptBatchSize),
+			zap.Duration("batchTimeout", deliveryReceiptBatchTimeout))
+	}
+
+	go func() {
+		batch := make([]*DeliveryReceipt, 0, deliveryReceiptBatchSize)
+		ticker := time.NewTicker(deliveryReceiptBatchTimeout)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case receipt := <-a.deliveryReceiptQueue:
+				if receipt == nil {
+					continue
+				}
+				batch = append(batch, receipt)
+
+				// Если набрали полный batch - сохраняем
+				if len(batch) >= deliveryReceiptBatchSize {
+					a.processBatch(batch)
+					batch = make([]*DeliveryReceipt, 0, deliveryReceiptBatchSize)
+					ticker.Reset(deliveryReceiptBatchTimeout)
+				}
+
+			case <-ticker.C:
+				// Таймаут - сохраняем что накопилось
+				if len(batch) > 0 {
+					a.processBatch(batch)
+					batch = make([]*DeliveryReceipt, 0, deliveryReceiptBatchSize)
+				}
+
+			case <-a.receiptWorkerStop:
+				if logger.Log != nil {
+					logger.Log.Info("Остановка воркера обработки delivery receipts")
+				}
+				// Сохраняем накопленный batch
+				if len(batch) > 0 {
+					a.processBatch(batch)
+				}
+				// Обрабатываем оставшиеся receipts в очереди
+				a.drainReceiptQueue()
+				return
+			}
+		}
+	}()
+}
+
+// processBatch обрабатывает batch delivery receipts
+func (a *SMPPAdapter) processBatch(batch []*DeliveryReceipt) {
+	if len(batch) == 0 {
+		return
+	}
+
+	// Отмечаем начало обработки для graceful shutdown
+	a.deliveryReceiptWg.Add(1)
+	defer a.deliveryReceiptWg.Done()
+
+	// Получаем callbacks
+	a.mu.Lock()
+	batchCallback := a.batchDeliveryReceiptCallback
+	singleCallback := a.deliveryReceiptCallback
+	a.mu.Unlock()
+
+	// Приоритет batch callback
+	if batchCallback != nil {
+		saved := batchCallback(batch)
+		if logger.Log != nil {
+			logger.Log.Debug("Batch delivery receipts обработан",
+				zap.Int("total", len(batch)),
+				zap.Int("saved", saved))
+		}
+		return
+	}
+
+	// Fallback на одиночный callback
+	if singleCallback != nil {
+		for _, receipt := range batch {
+			singleCallback(receipt)
+		}
+		return
+	}
+
+	if logger.Log != nil {
+		logger.Log.Warn("Batch delivery receipts получен, но callback не установлен",
+			zap.Int("count", len(batch)))
+	}
+}
+
+// drainReceiptQueue обрабатывает все оставшиеся receipts в очереди при остановке (batch mode)
+func (a *SMPPAdapter) drainReceiptQueue() {
+	batch := make([]*DeliveryReceipt, 0, deliveryReceiptBatchSize)
+
+	// Собираем все оставшиеся receipts
+	for {
+		select {
+		case receipt := <-a.deliveryReceiptQueue:
+			if receipt == nil {
+				continue
+			}
+			batch = append(batch, receipt)
+			// Если набрали полный batch - сохраняем сразу
+			if len(batch) >= deliveryReceiptBatchSize {
+				a.processBatch(batch)
+				batch = make([]*DeliveryReceipt, 0, deliveryReceiptBatchSize)
+			}
+		default:
+			// Очередь пуста - сохраняем остаток
+			if len(batch) > 0 {
+				a.processBatch(batch)
+				if logger.Log != nil {
+					logger.Log.Info("Обработаны оставшиеся delivery receipts при остановке",
+						zap.Int("count", len(batch)))
+				}
+			}
+			return
+		}
+	}
+}
+
+// StopDeliveryReceiptWorker останавливает воркер обработки delivery receipts
+func (a *SMPPAdapter) StopDeliveryReceiptWorker() {
+	a.mu.Lock()
+	if !a.receiptWorkerRunning {
+		a.mu.Unlock()
+		return
+	}
+	a.receiptWorkerRunning = false
+	a.mu.Unlock()
+
+	// Отправляем сигнал остановки
+	select {
+	case a.receiptWorkerStop <- struct{}{}:
+	default:
+		// Воркер уже остановлен
+	}
+}
+
+// GetDeliveryReceiptQueueSize возвращает текущий размер очереди delivery receipts
+func (a *SMPPAdapter) GetDeliveryReceiptQueueSize() int {
+	return len(a.deliveryReceiptQueue)
 }
 
 // handleIncomingPDU обрабатывает входящие PDU (DELIVER_SM для delivery receipts)
@@ -214,17 +395,25 @@ func (a *SMPPAdapter) handleDeliverSM(p pdu.Body) {
 	// Обновляем время последнего ответа
 	a.mu.Lock()
 	a.lastAnswerTime = time.Now()
-	callback := a.deliveryReceiptCallback
 	a.mu.Unlock()
 
-	// Вызываем callback, если он установлен
-	if callback != nil {
-		callback(receipt)
-	} else {
+	// Добавляем receipt в буферную очередь (неблокирующая операция)
+	select {
+	case a.deliveryReceiptQueue <- receipt:
+		// Успешно добавлено в очередь
 		if logger.Log != nil {
-			logger.Log.Warn("Delivery receipt получен, но callback не установлен",
+			logger.Log.Debug("Delivery receipt добавлен в очередь",
 				zap.String("messageID", receiptedMessageID),
-				zap.Int("statusID", statusID))
+				zap.Int("statusID", statusID),
+				zap.Int("queueSize", len(a.deliveryReceiptQueue)))
+		}
+	default:
+		// Очередь переполнена - логируем ошибку
+		if logger.Log != nil {
+			logger.Log.Error("Очередь delivery receipts переполнена, receipt потерян",
+				zap.String("messageID", receiptedMessageID),
+				zap.Int("statusID", statusID),
+				zap.Int("queueSize", deliveryReceiptQueueSize))
 		}
 	}
 }
@@ -724,6 +913,9 @@ func isConnectionError(err error) bool {
 
 // Close закрывает соединение
 func (a *SMPPAdapter) Close() error {
+	// Останавливаем воркер обработки delivery receipts
+	a.StopDeliveryReceiptWorker()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

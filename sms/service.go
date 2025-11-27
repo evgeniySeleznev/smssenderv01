@@ -41,23 +41,24 @@ type SaveResponseCallback func(response *SMSResponse)
 
 // Service представляет сервис для отправки SMS
 type Service struct {
-	cfg                     *Config
-	mu                      sync.RWMutex
-	lastActivity            map[int]time.Time       // Последняя активность по каждому SMPP провайдеру
-	getTestPhone            TestPhoneGetter         // Функция для получения тестового номера (опционально)
-	adapters                map[int]*SMPPAdapter    // Кэш адаптеров по SMPP ID
-	initialized             bool                    // Флаг инициализации адаптеров
-	rebindTicker            *time.Ticker            // Таймер для периодического переподключения
-	rebindStop              chan struct{}           // Канал для остановки переподключения
-	rebindWg                sync.WaitGroup          // WaitGroup для ожидания завершения горутины переподключения
-	retryQueue              []*RetryMessage         // Очередь сообщений для повторной отправки (неограниченная)
-	retryQueueMu            sync.Mutex              // Мьютекс для защиты очереди повторных попыток
-	retryWg                 sync.WaitGroup          // WaitGroup для ожидания завершения горутины повторных попыток
-	retryStop               chan struct{}           // Канал для остановки механизма повторных попыток
-	retryStarted            bool                    // Флаг запуска механизма повторных попыток
-	scheduledQueue          *ScheduledQueue         // Очередь отложенных сообщений (для schedule=1 вне окна)
-	saveCallback            SaveResponseCallback    // Callback для сохранения результата в БД
-	deliveryReceiptCallback DeliveryReceiptCallback // Callback для обработки delivery receipts
+	cfg                          *Config
+	mu                           sync.RWMutex
+	lastActivity                 map[int]time.Time            // Последняя активность по каждому SMPP провайдеру
+	getTestPhone                 TestPhoneGetter              // Функция для получения тестового номера (опционально)
+	adapters                     map[int]*SMPPAdapter         // Кэш адаптеров по SMPP ID
+	initialized                  bool                         // Флаг инициализации адаптеров
+	rebindTicker                 *time.Ticker                 // Таймер для периодического переподключения
+	rebindStop                   chan struct{}                // Канал для остановки переподключения
+	rebindWg                     sync.WaitGroup               // WaitGroup для ожидания завершения горутины переподключения
+	retryQueue                   []*RetryMessage              // Очередь сообщений для повторной отправки (неограниченная)
+	retryQueueMu                 sync.Mutex                   // Мьютекс для защиты очереди повторных попыток
+	retryWg                      sync.WaitGroup               // WaitGroup для ожидания завершения горутины повторных попыток
+	retryStop                    chan struct{}                // Канал для остановки механизма повторных попыток
+	retryStarted                 bool                         // Флаг запуска механизма повторных попыток
+	scheduledQueue               *ScheduledQueue              // Очередь отложенных сообщений (для schedule=1 вне окна)
+	saveCallback                 SaveResponseCallback         // Callback для сохранения результата в БД
+	deliveryReceiptCallback      DeliveryReceiptCallback      // Callback для обработки одиночных delivery receipts (deprecated)
+	batchDeliveryReceiptCallback BatchDeliveryReceiptCallback // Callback для batch-обработки delivery receipts
 }
 
 // NewService создает новый сервис отправки SMS
@@ -118,6 +119,25 @@ func (s *Service) GetDeliveryReceiptCallback() DeliveryReceiptCallback {
 	return s.deliveryReceiptCallback
 }
 
+// SetBatchDeliveryReceiptCallback устанавливает callback для batch-обработки delivery receipts
+// Callback вызывается с batch по 50 receipts или каждые 2 секунды (что раньше)
+func (s *Service) SetBatchDeliveryReceiptCallback(callback BatchDeliveryReceiptCallback) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.batchDeliveryReceiptCallback = callback
+
+	// Устанавливаем callback на все существующие адаптеры
+	for smppID, adapter := range s.adapters {
+		if adapter != nil {
+			adapter.SetBatchDeliveryReceiptCallback(callback)
+			if logger.Log != nil {
+				logger.Log.Debug("Установлен batch callback для delivery receipts",
+					zap.Int("smppID", smppID))
+			}
+		}
+	}
+}
+
 // InitializeAdapters инициализирует все SMPP адаптеры и устанавливает соединения заранее
 func (s *Service) InitializeAdapters() error {
 	s.mu.Lock()
@@ -150,9 +170,14 @@ func (s *Service) InitializeAdapters() error {
 		}
 
 		// Устанавливаем callback для delivery receipts, если он уже установлен
-		if s.deliveryReceiptCallback != nil {
+		if s.batchDeliveryReceiptCallback != nil {
+			adapter.SetBatchDeliveryReceiptCallback(s.batchDeliveryReceiptCallback)
+		} else if s.deliveryReceiptCallback != nil {
 			adapter.SetDeliveryReceiptCallback(s.deliveryReceiptCallback)
 		}
+
+		// Запускаем воркер обработки delivery receipts для этого адаптера
+		adapter.StartDeliveryReceiptWorker()
 
 		s.adapters[smppID] = adapter
 
@@ -351,6 +376,20 @@ func (s *Service) WaitForAllDeliveryReceipts(timeout time.Duration) bool {
 	}
 
 	return allCompleted
+}
+
+// GetDeliveryReceiptQueueSize возвращает суммарный размер очередей delivery receipts всех адаптеров
+func (s *Service) GetDeliveryReceiptQueueSize() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	total := 0
+	for _, adapter := range s.adapters {
+		if adapter != nil {
+			total += adapter.GetDeliveryReceiptQueueSize()
+		}
+	}
+	return total
 }
 
 // Close закрывает все SMPP адаптеры и освобождает ресурсы
