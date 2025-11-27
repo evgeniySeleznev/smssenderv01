@@ -70,6 +70,7 @@ type SMPPAdapter struct {
 	consecutiveFailures     int                     // Количество последовательных неудачных попыток
 	lastRebindLogTime       time.Time               // Время последнего логирования перед rebind
 	deliveryReceiptCallback DeliveryReceiptCallback // Callback для обработки delivery receipt
+	deliveryReceiptWg       sync.WaitGroup          // WaitGroup для ожидания завершения обработки receipts
 }
 
 // NewSMPPAdapter создает новый SMPP адаптер
@@ -135,6 +136,10 @@ func (a *SMPPAdapter) handleIncomingPDU(p pdu.Body) {
 
 // handleDeliverSM обрабатывает входящий DELIVER_SM (delivery receipt)
 func (a *SMPPAdapter) handleDeliverSM(p pdu.Body) {
+	// Отмечаем начало обработки для graceful shutdown
+	a.deliveryReceiptWg.Add(1)
+	defer a.deliveryReceiptWg.Done()
+
 	// Извлекаем данные из delivery receipt
 	fields := p.Fields()
 
@@ -726,4 +731,22 @@ func (a *SMPPAdapter) Close() error {
 		return a.client.Close()
 	}
 	return nil
+}
+
+// WaitForDeliveryReceipts ожидает завершения всех текущих обработок delivery receipts
+// Возвращает true, если все обработки завершились до истечения таймаута
+// Возвращает false, если таймаут истек
+func (a *SMPPAdapter) WaitForDeliveryReceipts(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		a.deliveryReceiptWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }

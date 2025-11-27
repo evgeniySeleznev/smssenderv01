@@ -43,21 +43,21 @@ type SaveResponseCallback func(response *SMSResponse)
 type Service struct {
 	cfg                     *Config
 	mu                      sync.RWMutex
-	lastActivity            map[int]time.Time        // Последняя активность по каждому SMPP провайдеру
-	getTestPhone            TestPhoneGetter          // Функция для получения тестового номера (опционально)
-	adapters                map[int]*SMPPAdapter     // Кэш адаптеров по SMPP ID
-	initialized             bool                     // Флаг инициализации адаптеров
-	rebindTicker            *time.Ticker             // Таймер для периодического переподключения
-	rebindStop              chan struct{}            // Канал для остановки переподключения
-	rebindWg                sync.WaitGroup           // WaitGroup для ожидания завершения горутины переподключения
-	retryQueue              []*RetryMessage          // Очередь сообщений для повторной отправки (неограниченная)
-	retryQueueMu            sync.Mutex               // Мьютекс для защиты очереди повторных попыток
-	retryWg                 sync.WaitGroup           // WaitGroup для ожидания завершения горутины повторных попыток
-	retryStop               chan struct{}            // Канал для остановки механизма повторных попыток
-	retryStarted            bool                     // Флаг запуска механизма повторных попыток
-	scheduledQueue          *ScheduledQueue          // Очередь отложенных сообщений (для schedule=1 вне окна)
-	saveCallback            SaveResponseCallback     // Callback для сохранения результата в БД
-	deliveryReceiptCallback DeliveryReceiptCallback  // Callback для обработки delivery receipts
+	lastActivity            map[int]time.Time       // Последняя активность по каждому SMPP провайдеру
+	getTestPhone            TestPhoneGetter         // Функция для получения тестового номера (опционально)
+	adapters                map[int]*SMPPAdapter    // Кэш адаптеров по SMPP ID
+	initialized             bool                    // Флаг инициализации адаптеров
+	rebindTicker            *time.Ticker            // Таймер для периодического переподключения
+	rebindStop              chan struct{}           // Канал для остановки переподключения
+	rebindWg                sync.WaitGroup          // WaitGroup для ожидания завершения горутины переподключения
+	retryQueue              []*RetryMessage         // Очередь сообщений для повторной отправки (неограниченная)
+	retryQueueMu            sync.Mutex              // Мьютекс для защиты очереди повторных попыток
+	retryWg                 sync.WaitGroup          // WaitGroup для ожидания завершения горутины повторных попыток
+	retryStop               chan struct{}           // Канал для остановки механизма повторных попыток
+	retryStarted            bool                    // Флаг запуска механизма повторных попыток
+	scheduledQueue          *ScheduledQueue         // Очередь отложенных сообщений (для schedule=1 вне окна)
+	saveCallback            SaveResponseCallback    // Callback для сохранения результата в БД
+	deliveryReceiptCallback DeliveryReceiptCallback // Callback для обработки delivery receipts
 }
 
 // NewService создает новый сервис отправки SMS
@@ -217,6 +217,14 @@ func (s *Service) GetScheduledQueueSize() int {
 	return 0
 }
 
+// SetShutdownTimeout устанавливает таймаут для graceful shutdown
+// Влияет на очередь отложенных сообщений и другие операции завершения
+func (s *Service) SetShutdownTimeout(timeout time.Duration) {
+	if s.scheduledQueue != nil {
+		s.scheduledQueue.SetShutdownTimeout(timeout)
+	}
+}
+
 // StartPeriodicRebind запускает горутину для периодического переподключения SMPP адаптеров
 func (s *Service) StartPeriodicRebind() {
 	s.mu.Lock()
@@ -310,6 +318,39 @@ func (s *Service) StopPeriodicRebind() {
 		// Создаем новый канал для следующего запуска
 		s.rebindStop = make(chan struct{})
 	}
+}
+
+// WaitForAllDeliveryReceipts ожидает завершения обработки всех delivery receipts на всех адаптерах
+// Вызывается при graceful shutdown перед закрытием соединений
+// Возвращает true, если все обработки завершились до истечения таймаута
+func (s *Service) WaitForAllDeliveryReceipts(timeout time.Duration) bool {
+	s.mu.RLock()
+	adaptersCopy := make(map[int]*SMPPAdapter, len(s.adapters))
+	for id, adapter := range s.adapters {
+		adaptersCopy[id] = adapter
+	}
+	s.mu.RUnlock()
+
+	allCompleted := true
+	for smppID, adapter := range adaptersCopy {
+		if adapter != nil {
+			if !adapter.WaitForDeliveryReceipts(timeout) {
+				if logger.Log != nil {
+					logger.Log.Warn("Таймаут ожидания завершения delivery receipts",
+						zap.Int("smppID", smppID),
+						zap.Duration("timeout", timeout))
+				}
+				allCompleted = false
+			} else {
+				if logger.Log != nil {
+					logger.Log.Debug("Все delivery receipts обработаны",
+						zap.Int("smppID", smppID))
+				}
+			}
+		}
+	}
+
+	return allCompleted
 }
 
 // Close закрывает все SMPP адаптеры и освобождает ресурсы
