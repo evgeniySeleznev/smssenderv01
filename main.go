@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"oracle-client/db"
+	"oracle-client/logger"
 	"oracle-client/sms"
 	"os"
 	"os/signal"
@@ -14,9 +14,27 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func main() {
+	// Создаем подключение к БД для загрузки конфигурации
+	dbConn, err := db.NewDBConnection()
+	if err != nil {
+		// Используем стандартный вывод для критических ошибок до инициализации логгера
+		os.Stderr.WriteString("Ошибка создания подключения: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	defer dbConn.CloseConnection()
+
+	// Инициализируем логгер с конфигурацией из БД
+	if err := logger.InitLogger(dbConn.GetConfig()); err != nil {
+		os.Stderr.WriteString("Ошибка инициализации логгера: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	defer logger.Log.Sync()
+
 	// Создаем контекст для graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -33,23 +51,16 @@ func main() {
 	// Горутина для обработки сигналов
 	go func() {
 		sig := <-sigChan
-		log.Printf("Получен сигнал %v, инициируется graceful shutdown...", sig)
+		logger.Log.Info("Получен сигнал, инициируется graceful shutdown", zap.String("signal", sig.String()))
 		cancel()
 	}()
 
-	// Создаем подключение к БД
-	dbConn, err := db.NewDBConnection()
-	if err != nil {
-		log.Fatalf("Ошибка создания подключения: %v", err)
-	}
-	defer dbConn.CloseConnection()
-
 	// Открываем соединение
 	if err := dbConn.OpenConnection(); err != nil {
-		log.Fatalf("Ошибка открытия соединения: %v", err)
+		logger.Log.Fatal("Ошибка открытия соединения", zap.Error(err))
 	}
 
-	log.Println("Успешно подключено к Oracle базе данных")
+	logger.Log.Info("Успешно подключено к Oracle базе данных")
 
 	// Запускаем механизм периодического переподключения к БД (каждые 300 секунд)
 	dbConn.StartPeriodicReconnect()
@@ -57,9 +68,9 @@ func main() {
 	// Загружаем конфигурацию SMS сервиса
 	smsConfig, err := sms.LoadConfig(dbConn.GetConfig())
 	if err != nil {
-		log.Fatalf("Ошибка загрузки конфигурации SMS: %v", err)
+		logger.Log.Fatal("Ошибка загрузки конфигурации SMS", zap.Error(err))
 	}
-	log.Printf("Конфигурация SMS загружена. Режим Silent: %v", smsConfig.Mode.Silent)
+	logger.Log.Info("Конфигурация SMS загружена", zap.Bool("silent", smsConfig.Mode.Silent))
 
 	// Создаем SMS сервис
 	smsService := sms.NewService(smsConfig)
@@ -69,19 +80,20 @@ func main() {
 
 	// Инициализируем SMPP адаптеры заранее (подключаемся ко всем провайдерам)
 	if err := smsService.InitializeAdapters(); err != nil {
-		log.Printf("Предупреждение: ошибка инициализации адаптеров: %v", err)
-		log.Println("Адаптеры будут инициализированы при первой отправке SMS")
+		logger.Log.Warn("Ошибка инициализации адаптеров", zap.Error(err))
+		logger.Log.Info("Адаптеры будут инициализированы при первой отправке SMS")
 	}
 
 	// Создаем QueueReader
 	queueReader, err := db.NewQueueReader(dbConn)
 	if err != nil {
-		log.Fatalf("Ошибка создания QueueReader: %v", err)
+		logger.Log.Fatal("Ошибка создания QueueReader", zap.Error(err))
 	}
 
-	log.Printf("Очередь: %s", queueReader.GetQueueName())
-	log.Printf("Consumer: %s", queueReader.GetConsumerName())
-	log.Println("Начало работы с очередью Oracle AQ...")
+	logger.Log.Info("Настройки очереди",
+		zap.String("queue", queueReader.GetQueueName()),
+		zap.String("consumer", queueReader.GetConsumerName()))
+	logger.Log.Info("Начало работы с очередью Oracle AQ...")
 
 	// Устанавливаем таймаут ожидания сообщений (аналогично Python: queue.deqoptions.wait = 10)
 	queueReader.SetWaitTimeout(10)
@@ -99,12 +111,11 @@ func main() {
 	if processExceptionQueue {
 		exceptionQueueReader, err = db.NewExceptionQueueReader(dbConn)
 		if err != nil {
-			log.Printf("Предупреждение: не удалось создать ExceptionQueueReader: %v", err)
-			log.Println("Продолжаем работу без обработки exception queue")
+			logger.Log.Warn("Не удалось создать ExceptionQueueReader", zap.Error(err))
+			logger.Log.Info("Продолжаем работу без обработки exception queue")
 			processExceptionQueue = false
 		} else {
-			log.Printf("Exception Queue: %s", exceptionQueueReader.GetQueueName())
-			log.Println("Обработка exception queue включена")
+			logger.Log.Info("Обработка exception queue включена", zap.String("queue", exceptionQueueReader.GetQueueName()))
 			exceptionQueueReader.SetWaitTimeout(25)
 		}
 	}
@@ -114,49 +125,54 @@ func main() {
 	// иначе они будут потеряны. При graceful shutdown мы прекращаем только чтение новых сообщений,
 	// но продолжаем обрабатывать уже вычитанные.
 	processMessagesBatch := func(ctx context.Context, messages []*db.QueueMessage, batchNum int) {
-		log.Printf("Обработка батча %d: %d сообщений", batchNum, len(messages))
+		logger.Log.Debug("Обработка батча", zap.Int("batchNum", batchNum), zap.Int("count", len(messages)))
 		for i, msg := range messages {
 			// НЕ прерываем обработку уже вычитанных сообщений - они должны быть обработаны до конца
 			// Проверка контекста здесь только для логирования, но не для прерывания
 
-			log.Printf("\n--- Сообщение %d (батч %d) ---", i+1, batchNum)
-			log.Printf("MessageID: %s", msg.MessageID)
-			log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
+			logger.Log.Debug("Обработка сообщения",
+				zap.Int("messageNum", i+1),
+				zap.Int("batchNum", batchNum),
+				zap.String("messageID", msg.MessageID),
+				zap.Time("dequeueTime", msg.DequeueTime))
 
 			// Парсим XML сообщение
 			parsed, err := queueReader.ParseXMLMessage(msg)
 			if err != nil {
-				log.Printf("Ошибка парсинга XML: %v", err)
+				logger.Log.Error("Ошибка парсинга XML", zap.Error(err), zap.String("messageID", msg.MessageID))
 				continue
 			}
 
 			// Выводим распарсенные данные в JSON формате для читаемости
 			jsonData, _ := json.MarshalIndent(parsed, "", "  ")
-			log.Printf("Распарсенные данные:\n%s", string(jsonData))
+			logger.Log.Debug("Распарсенные данные", zap.String("data", string(jsonData)))
 
 			// Преобразуем распарсенные данные в SMSMessage
 			smsMsg, err := sms.ParseSMSMessage(parsed)
 			if err != nil {
-				log.Printf("Ошибка преобразования в SMSMessage: %v", err)
+				logger.Log.Error("Ошибка преобразования в SMSMessage", zap.Error(err))
 				continue
 			}
 
 			// Обрабатываем и отправляем SMS
 			response, err := smsService.ProcessSMS(*smsMsg)
 			if err != nil {
-				log.Printf("Ошибка обработки SMS: %v", err)
+				logger.Log.Error("Ошибка обработки SMS", zap.Error(err))
 				continue
 			}
 
 			// Логируем результат
-			log.Printf("Результат отправки SMS: TaskID=%d, Status=%d, MessageID=%s, ErrorText=%s",
-				response.TaskID, response.Status, response.MessageID, response.ErrorText)
+			logger.Log.Info("Результат отправки SMS",
+				zap.Int64("taskID", response.TaskID),
+				zap.Int("status", response.Status),
+				zap.String("messageID", response.MessageID),
+				zap.String("errorText", response.ErrorText))
 
 			// Задержка между обработкой сообщений (аналогично C#: Thread.Sleep(20))
 			// НЕ прерываем задержку - сообщения уже вычитаны из очереди и должны быть обработаны
 			time.Sleep(20 * time.Millisecond)
 		}
-		log.Printf("Батч %d обработан", batchNum)
+		logger.Log.Debug("Батч обработан", zap.Int("batchNum", batchNum))
 	}
 
 	// WaitGroup для отслеживания всех обработчиков сообщений
@@ -185,7 +201,7 @@ func runQueueProcessingLoop(
 	for {
 		// Проверяем контекст перед началом итерации
 		if ctx.Err() != nil {
-			log.Println("Получен сигнал остановки, прекращаем чтение из очереди...")
+			logger.Log.Info("Получен сигнал остановки, прекращаем чтение из очереди...")
 			return
 		}
 
@@ -202,7 +218,7 @@ func runQueueProcessingLoop(
 			select {
 			case <-timer.C:
 				// Таймер сработал - не получили ответ за 2 минуты
-				log.Println("Таймаут: не получен ответ из DequeueMany в течение 2 минут, завершаем работу...")
+				logger.Log.Warn("Таймаут: не получен ответ из DequeueMany в течение 2 минут, завершаем работу...")
 				cancel()
 			case <-iterationSignalChan:
 				// Получили сигнал - ответ получен, прекращаем работу горутины
@@ -215,7 +231,7 @@ func runQueueProcessingLoop(
 
 		// Перед чтением проверяем наличие доступных SMPP соединений, чтобы не вычитывать сообщения впустую
 		if !smsService.EnsureSMPPConnectivity() {
-			log.Println("Нет доступных SMPP соединений, чтение очереди пропущено")
+			logger.Log.Warn("Нет доступных SMPP соединений, чтение очереди пропущено")
 			if !sleepWithContext(ctx, 5*time.Second) {
 				return
 			}
@@ -230,14 +246,14 @@ func runQueueProcessingLoop(
 		// Отправляем сигнал в горутину о получении ответа (независимо от результата)
 		close(iterationSignalChan)
 		if err != nil {
-			log.Printf("Ошибка при выборке сообщений: %v", err)
+			logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
 			// При ошибке - переподключение
-			log.Println("Ошибка соединения, переподключение...")
+			logger.Log.Info("Ошибка соединения, переподключение...")
 			if !sleepWithContext(ctx, 5*time.Second) {
 				return
 			}
 			if err := dbConn.Reconnect(); err != nil {
-				log.Printf("Ошибка переподключения: %v", err)
+				logger.Log.Error("Ошибка переподключения", zap.Error(err))
 				if !sleepWithContext(ctx, 5*time.Second) {
 					return
 				}
@@ -248,10 +264,10 @@ func runQueueProcessingLoop(
 		if len(messages) == 0 {
 			// Очередь пуста - логируем и продолжаем цикл
 			// Аналогично Python: logging.info(f"Очередь {self.connType} пуста в течение {settings.query_wait_time} секунд, перезапускаю слушатель")
-			log.Println("Очередь пуста, ожидание следующей попытки...")
+			logger.Log.Debug("Очередь пуста, ожидание следующей попытки...")
 		} else {
 			// Обрабатываем полученные сообщения асинхронно батчами по 100
-			log.Printf("Получено сообщений: %d", len(messages))
+			logger.Log.Info("Получено сообщений", zap.Int("count", len(messages)))
 
 			// Разбиваем на батчи по 10 сообщений для асинхронной обработки
 			batchSize := 10
@@ -260,7 +276,9 @@ func runQueueProcessingLoop(
 			for i := 0; i < len(messages); i += batchSize {
 				// Проверяем контекст перед запуском нового батча
 				if ctx.Err() != nil {
-					log.Printf("Получен сигнал остановки, прекращаем запуск новых батчей (обработано %d/%d сообщений)", i, len(messages))
+					logger.Log.Info("Получен сигнал остановки, прекращаем запуск новых батчей",
+						zap.Int("processed", i),
+						zap.Int("total", len(messages)))
 					break
 				}
 
@@ -282,7 +300,7 @@ func runQueueProcessingLoop(
 
 			// Ждем завершения обработки всех батчей
 			wg.Wait()
-			log.Println("Все батчи обработаны")
+			logger.Log.Debug("Все батчи обработаны")
 		}
 
 		// Обрабатываем exception queue асинхронно, если включено (чтобы не блокировать основной цикл)
@@ -293,47 +311,50 @@ func runQueueProcessingLoop(
 				// Передаем контекст для возможности отмены операций при graceful shutdown
 				exceptionMessages, err := exceptionQueueReader.DequeueMany(ctx, 100)
 				if err != nil {
-					log.Printf("Ошибка при выборке сообщений из exception queue: %v", err)
+					logger.Log.Error("Ошибка при выборке сообщений из exception queue", zap.Error(err))
 					return
 				}
 				if len(exceptionMessages) > 0 {
-					log.Printf("Получено сообщений из exception queue: %d", len(exceptionMessages))
+					logger.Log.Info("Получено сообщений из exception queue", zap.Int("count", len(exceptionMessages)))
 
 					// ВАЖНО: Сообщения уже вычитаны из exception queue, поэтому мы ОБЯЗАНЫ обработать их до конца
 					for i, msg := range exceptionMessages {
-
-						log.Printf("\n--- Exception Queue Сообщение %d ---", i+1)
-						log.Printf("MessageID: %s", msg.MessageID)
-						log.Printf("DequeueTime: %s", msg.DequeueTime.Format("2006-01-02 15:04:05"))
+						logger.Log.Debug("Обработка сообщения из exception queue",
+							zap.Int("messageNum", i+1),
+							zap.String("messageID", msg.MessageID),
+							zap.Time("dequeueTime", msg.DequeueTime))
 
 						// Парсим XML сообщение
 						parsed, err := exceptionQueueReader.ParseXMLMessage(msg)
 						if err != nil {
-							log.Printf("Ошибка парсинга XML: %v", err)
+							logger.Log.Error("Ошибка парсинга XML", zap.Error(err), zap.String("messageID", msg.MessageID))
 							continue
 						}
 
 						// Выводим распарсенные данные в JSON формате для читаемости
 						jsonData, _ := json.MarshalIndent(parsed, "", "  ")
-						log.Printf("Распарсенные данные:\n%s", string(jsonData))
+						logger.Log.Debug("Распарсенные данные", zap.String("data", string(jsonData)))
 
 						// Преобразуем распарсенные данные в SMSMessage
 						smsMsg, err := sms.ParseSMSMessage(parsed)
 						if err != nil {
-							log.Printf("Ошибка преобразования в SMSMessage: %v", err)
+							logger.Log.Error("Ошибка преобразования в SMSMessage", zap.Error(err))
 							continue
 						}
 
 						// Обрабатываем и отправляем SMS из exception queue
 						response, err := smsService.ProcessSMS(*smsMsg)
 						if err != nil {
-							log.Printf("Ошибка обработки SMS из exception queue: %v", err)
+							logger.Log.Error("Ошибка обработки SMS из exception queue", zap.Error(err))
 							continue
 						}
 
 						// Логируем результат
-						log.Printf("Результат отправки SMS из exception queue: TaskID=%d, Status=%d, MessageID=%s, ErrorText=%s",
-							response.TaskID, response.Status, response.MessageID, response.ErrorText)
+						logger.Log.Info("Результат отправки SMS из exception queue",
+							zap.Int64("taskID", response.TaskID),
+							zap.Int("status", response.Status),
+							zap.String("messageID", response.MessageID),
+							zap.String("errorText", response.ErrorText))
 					}
 				}
 			}()
@@ -361,24 +382,24 @@ func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 
 // performGracefulShutdown выполняет корректное завершение всех операций
 func performGracefulShutdown(smsService *sms.Service, dbConn *db.DBConnection, allHandlersWg *sync.WaitGroup) {
-	log.Println("Начало graceful shutdown...")
-	log.Println("Ожидание завершения всех обработчиков сообщений...")
+	logger.Log.Info("Начало graceful shutdown...")
+	logger.Log.Info("Ожидание завершения всех обработчиков сообщений...")
 	allHandlersWg.Wait()
-	log.Println("Все обработчики сообщений завершены")
+	logger.Log.Info("Все обработчики сообщений завершены")
 
-	log.Println("Остановка механизма периодического переподключения SMPP...")
+	logger.Log.Info("Остановка механизма периодического переподключения SMPP...")
 	smsService.StopPeriodicRebind()
 
-	log.Println("Остановка механизма повторных попыток отправки SMS...")
+	logger.Log.Info("Остановка механизма повторных попыток отправки SMS...")
 	smsService.StopRetryWorker()
 
-	log.Println("Закрытие SMPP адаптеров...")
+	logger.Log.Info("Закрытие SMPP адаптеров...")
 	if err := smsService.Close(); err != nil {
-		log.Printf("Ошибка при закрытии SMPP адаптеров: %v", err)
+		logger.Log.Error("Ошибка при закрытии SMPP адаптеров", zap.Error(err))
 	}
 
-	log.Println("Остановка механизма периодического переподключения к БД...")
+	logger.Log.Info("Остановка механизма периодического переподключения к БД...")
 	dbConn.StopPeriodicReconnect()
 
-	log.Println("Graceful shutdown завершен успешно")
+	logger.Log.Info("Graceful shutdown завершен успешно")
 }

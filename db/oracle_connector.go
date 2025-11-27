@@ -4,14 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	_ "github.com/godror/godror"
+	"go.uber.org/zap"
 	"gopkg.in/ini.v1"
+
+	"oracle-client/logger"
 )
 
 const (
@@ -42,13 +44,15 @@ type DBConnection struct {
 func NewDBConnection() (*DBConnection, error) {
 	settingsPath := "./settings/db_settings.ini"
 	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
-		log.Printf("файл настроек не найден: %s", settingsPath)
+		// Используем стандартный вывод до инициализации логгера
+		os.Stderr.WriteString(fmt.Sprintf("файл настроек не найден: %s\n", settingsPath))
 		return nil, fmt.Errorf("файл настроек не найден: %s", settingsPath)
 	}
 
 	cfg, err := ini.Load(settingsPath)
 	if err != nil {
-		log.Printf("не удалось прочитать файл настроек %s: %v", settingsPath, err)
+		// Используем стандартный вывод до инициализации логгера
+		os.Stderr.WriteString(fmt.Sprintf("не удалось прочитать файл настроек %s: %v\n", settingsPath, err))
 		return nil, fmt.Errorf("не удалось прочитать файл настроек %s: %w", settingsPath, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,7 +85,9 @@ func (d *DBConnection) CloseConnection() {
 		_ = d.db.Close()
 		d.db = nil
 	}
-	log.Println("Database connection closed.")
+	if logger.Log != nil {
+		logger.Log.Info("Database connection closed")
+	}
 }
 
 // CheckConnection проверяет соединение с БД (аналогично Python: connection.ping())
@@ -92,7 +98,9 @@ func (d *DBConnection) CheckConnection() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 	if err := d.db.PingContext(ctx); err != nil {
-		log.Printf("Ошибка проверки соединения: %v", err)
+		if logger.Log != nil {
+			logger.Log.Debug("Ошибка проверки соединения", zap.Error(err))
+		}
 		return false
 	}
 	return true
@@ -123,19 +131,27 @@ func (d *DBConnection) Reconnect() error {
 		}
 
 		if retry < maxRetries-1 {
-			log.Printf("Обнаружены активные операции (%d операций), ожидание... (попытка %d/%d)",
-				activeCount, retry+1, maxRetries)
+			if logger.Log != nil {
+				logger.Log.Debug("Обнаружены активные операции, ожидание",
+					zap.Int32("activeOps", activeCount),
+					zap.Int("retry", retry+1),
+					zap.Int("maxRetries", maxRetries))
+			}
 			time.Sleep(retryDelay)
 		} else {
 			// Последняя попытка - ждем завершения операций
-			log.Printf("Последняя попытка: ожидание завершения активных операций (%d операций)", activeCount)
+			if logger.Log != nil {
+				logger.Log.Debug("Последняя попытка: ожидание завершения активных операций",
+					zap.Int32("activeOps", activeCount))
+			}
 			if err := d.waitForActiveOperations(); err != nil {
 				return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
 			}
 			// Финальная проверка
 			activeCount = d.activeOps.Load()
-			if activeCount > 0 {
-				log.Printf("Предупреждение: переподключение выполняется при наличии активных операций (%d операций)", activeCount)
+			if activeCount > 0 && logger.Log != nil {
+				logger.Log.Warn("Переподключение выполняется при наличии активных операций",
+					zap.Int32("activeOps", activeCount))
 			}
 			break
 		}
@@ -148,17 +164,22 @@ func (d *DBConnection) Reconnect() error {
 
 	// Финальная проверка под блокировкой (на случай гонки)
 	finalActiveCount := d.activeOps.Load()
-	if finalActiveCount > 0 {
-		log.Printf("Предупреждение: обнаружены активные операции под блокировкой (%d операций), продолжаем переподключение", finalActiveCount)
+	if finalActiveCount > 0 && logger.Log != nil {
+		logger.Log.Warn("Обнаружены активные операции под блокировкой, продолжаем переподключение",
+			zap.Int32("activeOps", finalActiveCount))
 	}
 
-	log.Println("Начало переподключения к базе данных...")
+	if logger.Log != nil {
+		logger.Log.Info("Начало переподключения к базе данных...")
+	}
 
 	// Закрываем текущий пул соединений
 	if d.db != nil {
 		_ = d.db.Close()
 		d.db = nil
-		log.Println("Текущий пул соединений закрыт.")
+		if logger.Log != nil {
+			logger.Log.Debug("Текущий пул соединений закрыт")
+		}
 	}
 
 	// Пересоздаем подключение (открываем новый пул)
@@ -166,7 +187,9 @@ func (d *DBConnection) Reconnect() error {
 		return fmt.Errorf("ошибка переподключения: %w", err)
 	}
 
-	log.Printf("Переподключение к базе данных выполнено успешно. Пул соединений пересоздан.")
+	if logger.Log != nil {
+		logger.Log.Info("Переподключение к базе данных выполнено успешно. Пул соединений пересоздан")
+	}
 	return nil
 }
 
@@ -189,7 +212,10 @@ func (d *DBConnection) waitForActiveOperations() error {
 
 		// Проверяем, не превышен ли максимальный срок ожидания
 		if time.Since(startTime) > maxWaitTime {
-			log.Printf("Предупреждение: превышено время ожидания завершения активных операций (%d активных операций)", activeCount)
+			if logger.Log != nil {
+				logger.Log.Warn("Превышено время ожидания завершения активных операций",
+					zap.Int32("activeOps", activeCount))
+			}
 			// Продолжаем переподключение, но логируем предупреждение
 			return nil
 		}
@@ -198,7 +224,10 @@ func (d *DBConnection) waitForActiveOperations() error {
 		// или изменилось количество активных операций
 		now := time.Now()
 		if now.Sub(lastLogTime) >= logInterval || activeCount != lastActiveCount {
-			log.Printf("Ожидание завершения активных операций перед переподключением (активных операций: %d)", activeCount)
+			if logger.Log != nil {
+				logger.Log.Debug("Ожидание завершения активных операций перед переподключением",
+					zap.Int32("activeOps", activeCount))
+			}
 			lastLogTime = now
 			lastActiveCount = activeCount
 		}
@@ -243,7 +272,9 @@ func (d *DBConnection) openConnectionInternal() error {
 
 	db, err := sql.Open("godror", connString)
 	if err != nil {
-		log.Printf("ошибка sql.Open: %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка sql.Open", zap.Error(err))
+		}
 		return fmt.Errorf("ошибка sql.Open: %w", err)
 	}
 
@@ -262,12 +293,16 @@ func (d *DBConnection) openConnectionInternal() error {
 	defer pingCancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
-		log.Printf("ошибка ping: %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка ping", zap.Error(err))
+		}
 		return fmt.Errorf("ошибка ping: %w", err)
 	}
 	d.db = db
 	d.lastReconnect = time.Now()
-	log.Println("Database connection opened (using Oracle Instant Client via godror).")
+	if logger.Log != nil {
+		logger.Log.Info("Database connection opened (using Oracle Instant Client via godror)")
+	}
 	return nil
 }
 
@@ -289,24 +324,36 @@ func (d *DBConnection) StartPeriodicReconnect() {
 		defer d.reconnectWg.Done()
 		defer d.reconnectTicker.Stop()
 
-		log.Printf("Запущен механизм периодического переподключения к БД (интервал: %v)", d.reconnectInterval)
+		if logger.Log != nil {
+			logger.Log.Info("Запущен механизм периодического переподключения к БД",
+				zap.Duration("interval", d.reconnectInterval))
+		}
 
 		for {
 			select {
 			case <-d.reconnectTicker.C:
 				// Время переподключения
-				log.Printf("Периодическое переподключение к БД (прошло %v с последнего переподключения)", time.Since(d.lastReconnect))
+				if logger.Log != nil {
+					logger.Log.Info("Периодическое переподключение к БД",
+						zap.Duration("sinceLastReconnect", time.Since(d.lastReconnect)))
+				}
 				if err := d.Reconnect(); err != nil {
-					log.Printf("Ошибка периодического переподключения: %v", err)
+					if logger.Log != nil {
+						logger.Log.Error("Ошибка периодического переподключения", zap.Error(err))
+					}
 					// Продолжаем работу, попробуем в следующий раз
 				}
 
 			case <-d.reconnectStop:
-				log.Println("Остановка механизма периодического переподключения к БД")
+				if logger.Log != nil {
+					logger.Log.Info("Остановка механизма периодического переподключения к БД")
+				}
 				return
 
 			case <-d.ctx.Done():
-				log.Println("Контекст отменен, остановка механизма периодического переподключения к БД")
+				if logger.Log != nil {
+					logger.Log.Info("Контекст отменен, остановка механизма периодического переподключения к БД")
+				}
 				return
 			}
 		}
@@ -382,10 +429,12 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 	// Выполняем PL/SQL блок
 	_, err = tx.ExecContext(queryCtx, plsql)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
-		log.Printf("Ошибка выполнения PL/SQL для pcsystem.PKG_SMS.GET_TEST_PHONE(): %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка выполнения PL/SQL для pcsystem.PKG_SMS.GET_TEST_PHONE()", zap.Error(err))
+		}
 		return "", fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
@@ -394,10 +443,12 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 	var testPhone sql.NullString
 	err = tx.QueryRowContext(queryCtx, query).Scan(&testPhone)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
-		log.Printf("Ошибка выполнения SELECT для temp_test_phone_pkg.get_phone_number(): %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка выполнения SELECT для temp_test_phone_pkg.get_phone_number()", zap.Error(err))
+		}
 		return "", fmt.Errorf("ошибка получения тестового номера: %w", err)
 	}
 
@@ -410,11 +461,16 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 	// считаем, что отправлять SMS некуда и просто фиксируем событие в логах.
 	if !testPhone.Valid || testPhone.String == "" {
 		errText := "Режим Debug: тестовый номер отсутствует, SMS не отправляется"
-		log.Printf("%s", errText)
+		if logger.Log != nil {
+			logger.Log.Warn(errText)
+		}
 		return "", fmt.Errorf("ошибка получения тестового номера: номер пуст")
 	}
 
-	log.Printf("pcsystem.PKG_SMS.GET_TEST_PHONE() result: L_PHONE_NUMBER = %s", testPhone.String)
+	if logger.Log != nil {
+		logger.Log.Debug("pcsystem.PKG_SMS.GET_TEST_PHONE() result",
+			zap.String("phoneNumber", testPhone.String))
+	}
 	return testPhone.String, nil
 }
 

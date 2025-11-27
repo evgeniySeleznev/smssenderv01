@@ -6,10 +6,13 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	"oracle-client/logger"
 )
 
 // QueueMessage представляет сообщение из очереди Oracle AQ
@@ -76,8 +79,13 @@ func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMess
 	if consumerName == "" {
 		consumerName = "NULL"
 	}
-	log.Printf("Попытка извлечения до %d сообщений из очереди %s (consumer: %s, timeout: %d сек)",
-		count, qr.queueName, consumerName, qr.waitTimeout)
+	if logger.Log != nil {
+		logger.Log.Debug("Попытка извлечения сообщений из очереди",
+			zap.Int("count", count),
+			zap.String("queue", qr.queueName),
+			zap.String("consumer", consumerName),
+			zap.Int("timeout", qr.waitTimeout))
+	}
 
 	// Создаем контекст с таймаутом для операций (объединяем с переданным контекстом)
 	// Это позволяет отменить операции при graceful shutdown
@@ -98,7 +106,10 @@ func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMess
 		// Проверяем контекст перед каждой итерацией для возможности прерывания
 		select {
 		case <-ctx.Done():
-			log.Printf("Операция чтения из очереди прервана (получено %d сообщений)", len(messages))
+			if logger.Log != nil {
+				logger.Log.Info("Операция чтения из очереди прервана",
+					zap.Int("received", len(messages)))
+			}
 			return messages, ctx.Err()
 		default:
 		}
@@ -117,7 +128,10 @@ func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMess
 		if err != nil {
 			// Если ошибка связана с отменой контекста, возвращаем частичный результат
 			if ctx.Err() != nil {
-				log.Printf("Операция чтения из очереди прервана из-за отмены контекста (получено %d сообщений)", len(messages))
+				if logger.Log != nil {
+					logger.Log.Info("Операция чтения из очереди прервана из-за отмены контекста",
+						zap.Int("received", len(messages)))
+				}
 				return messages, ctx.Err()
 			}
 			return messages, err
@@ -296,17 +310,24 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 
 	if err != nil {
 		// Откатываем транзакцию при ошибке
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		// Проверяем, не пуста ли очередь
 		errStr := err.Error()
 		if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
-			log.Printf("Очередь пуста (код ошибки 25228)")
+			if logger.Log != nil {
+				logger.Log.Debug("Очередь пуста (код ошибки 25228)")
+			}
 			return nil, nil
 		}
-		log.Printf("Ошибка выполнения PL/SQL для dequeue: %v", err)
-		log.Printf("Детали ошибки: consumer='%s', queue='%s', timeout=%.2f", qr.consumerName, qr.queueName, timeout)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка выполнения PL/SQL для dequeue",
+				zap.Error(err),
+				zap.String("consumer", qr.consumerName),
+				zap.String("queue", qr.queueName),
+				zap.Float64("timeout", timeout))
+		}
 		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
 	}
 
@@ -316,16 +337,16 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 	var errorMsg sql.NullString
 	err = tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, fmt.Errorf("ошибка проверки результата dequeue: %w", err)
 	}
 
 	// Если dequeue не удался (очередь пуста)
 	if !successFlag.Valid || successFlag.Int64 == 0 {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		if errorCode.Valid && errorCode.Int64 == -25228 {
 			return nil, nil // Очередь пуста
@@ -346,32 +367,34 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 
 	rows, err := tx.QueryContext(txCtx, query)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
-		log.Printf("Ошибка выполнения SELECT с XMLSerialize: %v", err)
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка выполнения SELECT с XMLSerialize", zap.Error(err))
+		}
 		return nil, fmt.Errorf("ошибка выполнения SELECT с XMLSerialize: %w", err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, nil
 	}
 
 	var msgid, payload sql.NullString
 	if err := rows.Scan(&msgid, &payload); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, fmt.Errorf("ошибка чтения данных: %w", err)
 	}
 
 	if !payload.Valid || payload.String == "" {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			log.Printf("Ошибка отката транзакции: %v", rollbackErr)
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
 		}
 		return nil, nil
 	}
@@ -400,7 +423,11 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 		DequeueTime: time.Now(),
 	}
 
-	log.Printf("Получено сообщение из очереди. MessageID: %s, размер: %d байт", msg.MessageID, len(msg.RawPayload))
+	if logger.Log != nil {
+		logger.Log.Debug("Получено сообщение из очереди",
+			zap.String("messageID", msg.MessageID),
+			zap.Int("size", len(msg.RawPayload)))
+	}
 	return msg, nil
 }
 
