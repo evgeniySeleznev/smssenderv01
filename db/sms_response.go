@@ -221,6 +221,167 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 	return true, nil
 }
 
+// SaveSmsResponseBatch сохраняет несколько результатов SMS за одну транзакцию
+// Возвращает количество успешно сохраненных записей и ошибку (если есть)
+// При ошибке отдельной записи продолжает сохранение остальных
+func (d *DBConnection) SaveSmsResponseBatch(ctx context.Context, params []SaveSmsResponseParams) (int, error) {
+	if len(params) == 0 {
+		return 0, nil
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.db == nil {
+		return 0, fmt.Errorf("соединение с БД не открыто")
+	}
+
+	// Проверяем соединение
+	if !d.CheckConnection() {
+		return 0, fmt.Errorf("соединение с БД недоступно")
+	}
+
+	// Отмечаем начало операции с БД
+	d.BeginOperation()
+	defer d.EndOperation()
+
+	// Создаем контекст с увеличенным таймаутом для batch-операции
+	// Используем execTimeout * 2 для batch, так как обрабатываем много записей
+	batchTimeout := execTimeout * 2
+	var queryCtx context.Context
+	var queryCancel context.CancelFunc
+	if ctx.Err() == context.Canceled {
+		queryCtx, queryCancel = context.WithTimeout(context.Background(), batchTimeout)
+	} else {
+		queryCtx, queryCancel = context.WithTimeout(ctx, batchTimeout)
+	}
+	defer queryCancel()
+
+	// Создаем пакет один раз для всех записей
+	if err := d.ensureSmsResponsePackageExists(queryCtx); err != nil {
+		return 0, fmt.Errorf("ошибка создания пакета: %w", err)
+	}
+
+	// Начинаем транзакцию
+	tx, err := d.db.BeginTx(queryCtx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка начала транзакции: %w", err)
+	}
+	defer tx.Rollback()
+
+	// PL/SQL блок для вызова процедуры
+	plsql := `
+		DECLARE
+			v_err_code NUMBER;
+			v_err_desc VARCHAR2(4000);
+		BEGIN
+			temp_sms_response_pkg.g_err_code := 0;
+			temp_sms_response_pkg.g_err_desc := NULL;
+			
+			pcsystem.pkg_sms.save_sms_response(
+				P_SMS_TASK_ID => :1,
+				P_MESSAGE_ID => :2,
+				P_STATUS_ID => :3,
+				P_DATE_RESPONSE => :4,
+				P_ERROR_TEXT => :5,
+				P_ERR_CODE => v_err_code,
+				P_ERR_DESC => v_err_desc
+			);
+			
+			temp_sms_response_pkg.g_err_code := v_err_code;
+			temp_sms_response_pkg.g_err_desc := v_err_desc;
+		END;`
+
+	successCount := 0
+	var lastErr error
+
+	for i, p := range params {
+		// Подготовка параметров
+		var taskID interface{}
+		if p.TaskID == -1 {
+			taskID = nil
+		} else {
+			taskID = p.TaskID
+		}
+
+		var errorText interface{}
+		if p.ErrorText == "" {
+			errorText = nil
+		} else {
+			errorText = p.ErrorText
+		}
+
+		// Выполняем процедуру
+		_, err := tx.ExecContext(queryCtx, plsql,
+			taskID,
+			p.MessageID,
+			p.StatusID,
+			p.ResponseDate,
+			errorText,
+		)
+
+		if err != nil {
+			if logger.Log != nil {
+				logger.Log.Warn("Ошибка сохранения записи в batch",
+					zap.Int("index", i),
+					zap.String("messageID", p.MessageID),
+					zap.Error(err))
+			}
+			lastErr = err
+			continue // Продолжаем с остальными записями
+		}
+
+		// Проверяем результат через функции пакета
+		checkResultSQL := `SELECT temp_sms_response_pkg.get_err_code(), temp_sms_response_pkg.get_err_desc() FROM DUAL`
+		var errCode sql.NullInt64
+		var errDesc sql.NullString
+		err = tx.QueryRowContext(queryCtx, checkResultSQL).Scan(&errCode, &errDesc)
+		if err != nil {
+			if logger.Log != nil {
+				logger.Log.Warn("Ошибка чтения результата в batch",
+					zap.Int("index", i),
+					zap.String("messageID", p.MessageID),
+					zap.Error(err))
+			}
+			lastErr = err
+			continue
+		}
+
+		// Проверка результата процедуры
+		if errCode.Valid && errCode.Int64 != 0 {
+			errMsg := ""
+			if errDesc.Valid {
+				errMsg = errDesc.String
+			}
+			if logger.Log != nil {
+				logger.Log.Warn("Ошибка процедуры в batch",
+					zap.Int("index", i),
+					zap.String("messageID", p.MessageID),
+					zap.Int64("errCode", errCode.Int64),
+					zap.String("errDesc", errMsg))
+			}
+			lastErr = fmt.Errorf("ошибка БД: %d - %s", errCode.Int64, errMsg)
+			continue
+		}
+
+		successCount++
+	}
+
+	// Коммитим транзакцию
+	if err := tx.Commit(); err != nil {
+		return successCount, fmt.Errorf("ошибка коммита транзакции: %w", err)
+	}
+
+	if logger.Log != nil && successCount > 0 {
+		logger.Log.Debug("Batch сохранение завершено",
+			zap.Int("total", len(params)),
+			zap.Int("success", successCount),
+			zap.Int("failed", len(params)-successCount))
+	}
+
+	return successCount, lastErr
+}
+
 // ensureSmsResponsePackageExists создает временный пакет Oracle для работы с OUT-параметрами процедуры save_sms_response
 // Аналогично queue_reader.go - Oracle требует использования пакетных переменных для передачи данных
 func (d *DBConnection) ensureSmsResponsePackageExists(ctx context.Context) error {

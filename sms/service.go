@@ -58,6 +58,7 @@ type Service struct {
 	scheduledQueue          *ScheduledQueue         // Очередь отложенных сообщений (для schedule=1 вне окна)
 	saveCallback            SaveResponseCallback    // Callback для сохранения результата в БД
 	deliveryReceiptCallback DeliveryReceiptCallback // Callback для обработки delivery receipts
+	deliveryReceiptQueue    *DeliveryReceiptQueue   // Буферизованная очередь для batch-сохранения delivery receipts
 }
 
 // NewService создает новый сервис отправки SMS
@@ -116,6 +117,55 @@ func (s *Service) GetDeliveryReceiptCallback() DeliveryReceiptCallback {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.deliveryReceiptCallback
+}
+
+// SetDeliveryReceiptQueue устанавливает очередь для batch-сохранения delivery receipts
+// Если очередь установлена, delivery receipts будут сохраняться пачками
+func (s *Service) SetDeliveryReceiptQueue(queue *DeliveryReceiptQueue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deliveryReceiptQueue = queue
+}
+
+// GetDeliveryReceiptQueue возвращает очередь delivery receipts
+func (s *Service) GetDeliveryReceiptQueue() *DeliveryReceiptQueue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deliveryReceiptQueue
+}
+
+// StartDeliveryReceiptQueue запускает очередь для batch-сохранения delivery receipts
+func (s *Service) StartDeliveryReceiptQueue() {
+	s.mu.RLock()
+	queue := s.deliveryReceiptQueue
+	s.mu.RUnlock()
+
+	if queue != nil {
+		queue.Start()
+	}
+}
+
+// StopDeliveryReceiptQueue останавливает очередь delivery receipts
+func (s *Service) StopDeliveryReceiptQueue() {
+	s.mu.RLock()
+	queue := s.deliveryReceiptQueue
+	s.mu.RUnlock()
+
+	if queue != nil {
+		queue.Stop()
+	}
+}
+
+// GetDeliveryReceiptQueueStats возвращает статистику очереди delivery receipts
+func (s *Service) GetDeliveryReceiptQueueStats() (received, saved, failed, batches int64) {
+	s.mu.RLock()
+	queue := s.deliveryReceiptQueue
+	s.mu.RUnlock()
+
+	if queue != nil {
+		return queue.GetStats()
+	}
+	return 0, 0, 0, 0
 }
 
 // InitializeAdapters инициализирует все SMPP адаптеры и устанавливает соединения заранее
