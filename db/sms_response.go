@@ -75,24 +75,24 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 	query := `
 		BEGIN
 			pcsystem.pkg_sms.save_sms_response(
-				P_SMS_TASK_ID => :1,
-				P_MESSAGE_ID => :2,
-				P_STATUS_ID => :3,
-				P_DATE_RESPONSE => :4,
-				P_ERROR_TEXT => :5,
-				P_ERR_CODE => :6,
-				P_ERR_DESC => :7
+				P_SMS_TASK_ID => :p_sms_task_id,
+				P_MESSAGE_ID => :p_message_id,
+				P_STATUS_ID => :p_status_id,
+				P_DATE_RESPONSE => :p_date_response,
+				P_ERROR_TEXT => :p_error_text,
+				P_ERR_CODE => :p_err_code,
+				P_ERR_DESC => :p_err_desc
 			);
 		END;`
 
 	_, err = tx.ExecContext(queryCtx, query,
-		taskID,
-		params.MessageID,
-		params.StatusID,
-		params.ResponseDate,
-		errorText,
-		sql.Out{Dest: &errCode},
-		sql.Out{Dest: &errDesc},
+		sql.Named("p_sms_task_id", taskID),
+		sql.Named("p_message_id", params.MessageID),
+		sql.Named("p_status_id", params.StatusID),
+		sql.Named("p_date_response", params.ResponseDate),
+		sql.Named("p_error_text", errorText),
+		sql.Named("p_err_code", sql.Out{Dest: &errCode}),
+		sql.Named("p_err_desc", sql.Out{Dest: &errDesc}),
 	)
 
 	if err != nil {
