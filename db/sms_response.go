@@ -61,6 +61,11 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 		errorText = params.ErrorText
 	}
 
+	// Создаем временный пакет для хранения OUT-параметров (аналогично queue_reader.go)
+	if err := d.ensureSmsResponsePackageExists(queryCtx); err != nil {
+		return false, fmt.Errorf("ошибка создания пакета: %w", err)
+	}
+
 	// Выполняем операции в транзакции для обеспечения атомарности
 	tx, err := d.db.BeginTx(queryCtx, nil)
 	if err != nil {
@@ -68,31 +73,39 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 	}
 	defer tx.Rollback() // Откатываем, если что-то пойдет не так
 
-	// Вызов процедуры с OUT параметрами
-	var errCode sql.NullInt64
-	var errDesc sql.NullString
-
-	query := `
+	// Используем подход аналогичный queue_reader.go - сохраняем OUT-параметры в пакетные переменные
+	// через PL/SQL блок, затем читаем их через SELECT
+	plsql := `
+		DECLARE
+			v_err_code NUMBER;
+			v_err_desc VARCHAR2(4000);
 		BEGIN
+			-- Инициализируем переменные пакета
+			temp_sms_response_pkg.g_err_code := 0;
+			temp_sms_response_pkg.g_err_desc := NULL;
+			
+			-- Вызываем процедуру и сохраняем OUT-параметры в локальные переменные
 			pcsystem.pkg_sms.save_sms_response(
-				P_SMS_TASK_ID => :p_sms_task_id,
-				P_MESSAGE_ID => :p_message_id,
-				P_STATUS_ID => :p_status_id,
-				P_DATE_RESPONSE => :p_date_response,
-				P_ERROR_TEXT => :p_error_text,
-				P_ERR_CODE => :p_err_code,
-				P_ERR_DESC => :p_err_desc
+				P_SMS_TASK_ID => :1,
+				P_MESSAGE_ID => :2,
+				P_STATUS_ID => :3,
+				P_DATE_RESPONSE => :4,
+				P_ERROR_TEXT => :5,
+				P_ERR_CODE => v_err_code,
+				P_ERR_DESC => v_err_desc
 			);
+			
+			-- Сохраняем результат в пакетные переменные
+			temp_sms_response_pkg.g_err_code := v_err_code;
+			temp_sms_response_pkg.g_err_desc := v_err_desc;
 		END;`
 
-	_, err = tx.ExecContext(queryCtx, query,
-		sql.Named("p_sms_task_id", taskID),
-		sql.Named("p_message_id", params.MessageID),
-		sql.Named("p_status_id", params.StatusID),
-		sql.Named("p_date_response", params.ResponseDate),
-		sql.Named("p_error_text", errorText),
-		sql.Named("p_err_code", sql.Out{Dest: &errCode}),
-		sql.Named("p_err_desc", sql.Out{Dest: &errDesc}),
+	_, err = tx.ExecContext(queryCtx, plsql,
+		taskID,
+		params.MessageID,
+		params.StatusID,
+		params.ResponseDate,
+		errorText,
 	)
 
 	if err != nil {
@@ -120,6 +133,24 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 				zap.Error(err))
 		}
 		return false, fmt.Errorf("ошибка вызова save_sms_response: %w", err)
+	}
+
+	// Читаем результат через функции пакета (аналогично queue_reader.go)
+	checkResultSQL := `SELECT temp_sms_response_pkg.get_err_code(), temp_sms_response_pkg.get_err_desc() FROM DUAL`
+	var errCode sql.NullInt64
+	var errDesc sql.NullString
+	err = tx.QueryRowContext(queryCtx, checkResultSQL).Scan(&errCode, &errDesc)
+	if err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
+		}
+		if logger.Log != nil {
+			logger.Log.Error("Ошибка чтения результата процедуры",
+				zap.Int64("taskID", params.TaskID),
+				zap.String("messageID", params.MessageID),
+				zap.Error(err))
+		}
+		return false, fmt.Errorf("ошибка чтения результата процедуры: %w", err)
 	}
 
 	// Коммитим транзакцию
@@ -164,4 +195,44 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 	}
 
 	return true, nil
+}
+
+// ensureSmsResponsePackageExists создает временный пакет Oracle для работы с OUT-параметрами процедуры save_sms_response
+// Аналогично queue_reader.go - Oracle требует использования пакетных переменных для передачи данных
+func (d *DBConnection) ensureSmsResponsePackageExists(ctx context.Context) error {
+	// Создаем пакет с переменными и функциями для доступа к ним
+	createPackageSQL := `
+		CREATE OR REPLACE PACKAGE temp_sms_response_pkg AS
+			g_err_code NUMBER := 0;
+			g_err_desc VARCHAR2(4000);
+			
+			FUNCTION get_err_code RETURN NUMBER;
+			FUNCTION get_err_desc RETURN VARCHAR2;
+		END temp_sms_response_pkg;
+	`
+	_, err := d.db.ExecContext(ctx, createPackageSQL)
+	if err != nil {
+		return fmt.Errorf("не удалось создать пакет temp_sms_response_pkg: %w", err)
+	}
+
+	// Создаем тело пакета с реализацией функций-геттеров
+	createPackageBodySQL := `
+		CREATE OR REPLACE PACKAGE BODY temp_sms_response_pkg AS
+			FUNCTION get_err_code RETURN NUMBER IS
+			BEGIN
+				RETURN g_err_code;
+			END;
+			
+			FUNCTION get_err_desc RETURN VARCHAR2 IS
+			BEGIN
+				RETURN g_err_desc;
+			END;
+		END temp_sms_response_pkg;
+	`
+	_, err = d.db.ExecContext(ctx, createPackageBodySQL)
+	if err != nil {
+		return fmt.Errorf("не удалось создать тело пакета temp_sms_response_pkg: %w", err)
+	}
+
+	return nil
 }
