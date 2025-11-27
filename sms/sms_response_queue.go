@@ -139,8 +139,19 @@ func (q *SmsResponseQueue) flushBatch(ctx context.Context, batch []*db.SaveSmsRe
 		logger.Log.Info("Сохранение батча результатов SMS в БД", zap.Int("count", len(batch)))
 	}
 
-	// Use a context with timeout for the batch save operation
-	saveCtx, saveCancel := context.WithTimeout(context.Background(), q.shutdownTimeout)
+	// Определяем таймаут в зависимости от контекста:
+	// - Если контекст отменен (graceful shutdown), используем shutdownTimeout
+	// - Иначе используем нормальный таймаут для операций с БД (60 секунд)
+	var saveCtx context.Context
+	var saveCancel context.CancelFunc
+	if ctx.Err() == context.Canceled {
+		// Graceful shutdown - используем короткий таймаут
+		saveCtx, saveCancel = context.WithTimeout(context.Background(), q.shutdownTimeout)
+	} else {
+		// Обычная операция - используем нормальный таймаут (60 секунд для batch-операций)
+		normalTimeout := 60 * time.Second
+		saveCtx, saveCancel = context.WithTimeout(ctx, normalTimeout)
+	}
 	defer saveCancel()
 
 	// Преобразуем []*db.SaveSmsResponseParams в []db.SaveSmsResponseParams
