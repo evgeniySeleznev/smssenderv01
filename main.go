@@ -115,6 +115,39 @@ func main() {
 		}
 	})
 
+	// Устанавливаем callback для обработки delivery receipts (статус 4 - доставлено)
+	// При получении delivery receipt сохраняем статус доставки в БД
+	// TaskID = -1 означает NULL в БД, связь устанавливается через MessageID
+	smsService.SetDeliveryReceiptCallback(func(receipt *sms.DeliveryReceipt) {
+		if receipt == nil {
+			return
+		}
+		saveParams := db.SaveSmsResponseParams{
+			TaskID:       -1, // NULL в БД - связь через MessageID
+			MessageID:    receipt.ReceiptedMessageID,
+			StatusID:     receipt.StatusID, // 4 = доставлено, 3 = не доставлено
+			ResponseDate: receipt.ReceivedAt,
+			ErrorText:    receipt.ErrorText,
+		}
+		if success, err := dbConn.SaveSmsResponse(context.Background(), saveParams); !success {
+			if err != nil {
+				logger.Log.Error("Ошибка сохранения delivery receipt в БД",
+					zap.String("messageID", receipt.ReceiptedMessageID),
+					zap.Int("statusID", receipt.StatusID),
+					zap.Error(err))
+			}
+		} else {
+			if receipt.StatusID == sms.StatusDelivered {
+				logger.Log.Info("Delivery receipt сохранен: SMS доставлено абоненту",
+					zap.String("messageID", receipt.ReceiptedMessageID))
+			} else {
+				logger.Log.Warn("Delivery receipt сохранен: SMS не доставлено",
+					zap.String("messageID", receipt.ReceiptedMessageID),
+					zap.String("errorText", receipt.ErrorText))
+			}
+		}
+	})
+
 	// Запускаем очередь отложенных сообщений
 	smsService.StartScheduledQueue(ctx)
 
