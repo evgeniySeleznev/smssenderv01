@@ -278,15 +278,16 @@ func main() {
 	// Ждем сигнала shutdown
 	<-shutdownRequested
 
+	logger.Log.Info("Начало graceful shutdown с таймаутом",
+		zap.Duration("timeout", shutdownTimeout))
+
 	// Создаем контекст с таймаутом для завершения операций
 	// Это дает дополнительное время на завершение отправки SMS и записи в БД
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
-	logger.Log.Info("Начало graceful shutdown с таймаутом",
-		zap.Duration("timeout", shutdownTimeout))
-
 	// Отменяем основной контекст, чтобы прекратить чтение новых сообщений
+	// НО уже запущенные операции продолжат работу до истечения shutdownCtx таймаута
 	cancel()
 
 	// Создаем канал для отслеживания завершения операций

@@ -41,9 +41,19 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 	d.BeginOperation()
 	defer d.EndOperation()
 
-	// Создаем контекст с таймаутом для транзакции, объединяя с переданным контекстом
-	// Это позволяет отменить транзакцию при graceful shutdown
-	queryCtx, queryCancel := context.WithTimeout(ctx, execTimeout)
+	// Создаем контекст с таймаутом для транзакции
+	// Если основной контекст отменен (graceful shutdown), используем background context
+	// чтобы дать время на завершение критических операций (сохранение в БД)
+	var queryCtx context.Context
+	var queryCancel context.CancelFunc
+	if ctx.Err() == context.Canceled {
+		// Контекст уже отменен - используем background context с таймаутом
+		// чтобы дать время на завершение операции
+		queryCtx, queryCancel = context.WithTimeout(context.Background(), execTimeout)
+	} else {
+		// Контекст активен - используем его с таймаутом
+		queryCtx, queryCancel = context.WithTimeout(ctx, execTimeout)
+	}
 	defer queryCancel()
 
 	// Подготовка параметров
@@ -110,16 +120,24 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 
 	if err != nil {
 		// Проверяем, была ли операция отменена из-за graceful shutdown
-		if ctx.Err() == context.Canceled {
+		// Но только если queryCtx тоже отменен (таймаут истек)
+		// Это позволяет дать время на завершение критических операций при graceful shutdown
+		if queryCtx.Err() != nil {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
 				logger.Log.Warn("Ошибка отката транзакции при отмене контекста", zap.Error(rollbackErr))
 			}
 			if logger.Log != nil {
-				logger.Log.Warn("Сохранение результата SMS отменено из-за graceful shutdown",
-					zap.Int64("taskID", params.TaskID),
-					zap.String("messageID", params.MessageID))
+				if ctx.Err() == context.Canceled {
+					logger.Log.Warn("Сохранение результата SMS отменено из-за graceful shutdown",
+						zap.Int64("taskID", params.TaskID),
+						zap.String("messageID", params.MessageID))
+				} else {
+					logger.Log.Warn("Сохранение результата SMS отменено из-за таймаута",
+						zap.Int64("taskID", params.TaskID),
+						zap.String("messageID", params.MessageID))
+				}
 			}
-			return false, fmt.Errorf("операция отменена: %w", ctx.Err())
+			return false, fmt.Errorf("операция отменена: %w", queryCtx.Err())
 		}
 
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
@@ -155,14 +173,20 @@ func (d *DBConnection) SaveSmsResponse(ctx context.Context, params SaveSmsRespon
 
 	// Коммитим транзакцию
 	if err := tx.Commit(); err != nil {
-		// Проверяем, была ли операция отменена из-за graceful shutdown
-		if ctx.Err() == context.Canceled {
+		// Проверяем, была ли операция отменена из-за graceful shutdown или таймаута
+		if queryCtx.Err() != nil {
 			if logger.Log != nil {
-				logger.Log.Warn("Коммит транзакции отменен из-за graceful shutdown",
-					zap.Int64("taskID", params.TaskID),
-					zap.String("messageID", params.MessageID))
+				if ctx.Err() == context.Canceled {
+					logger.Log.Warn("Коммит транзакции отменен из-за graceful shutdown",
+						zap.Int64("taskID", params.TaskID),
+						zap.String("messageID", params.MessageID))
+				} else {
+					logger.Log.Warn("Коммит транзакции отменен из-за таймаута",
+						zap.Int64("taskID", params.TaskID),
+						zap.String("messageID", params.MessageID))
+				}
 			}
-			return false, fmt.Errorf("операция отменена: %w", ctx.Err())
+			return false, fmt.Errorf("операция отменена: %w", queryCtx.Err())
 		}
 		return false, fmt.Errorf("ошибка коммита транзакции: %w", err)
 	}
