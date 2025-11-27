@@ -40,11 +40,18 @@ func InitLogger(cfg *ini.File) error {
 	// Читаем настройки из секции [Log]
 	if cfg != nil && cfg.HasSection("Log") {
 		logSection := cfg.Section("Log")
-		
+
 		// Читаем уровень логирования
 		if logLevelStr := logSection.Key("LogLevel").String(); logLevelStr != "" {
 			if level, err := strconv.Atoi(logLevelStr); err == nil {
-				logLevel = LogLevel(level)
+				// Валидация: уровень должен быть в диапазоне от LogLevelPanic (0) до LogLevelDebug (5)
+				if level >= int(LogLevelPanic) && level <= int(LogLevelDebug) {
+					logLevel = LogLevel(level)
+				} else {
+					// Используем стандартный вывод, так как логгер еще не инициализирован
+					os.Stderr.WriteString(fmt.Sprintf("Предупреждение: некорректный уровень логирования %d (допустимый диапазон: %d-%d), используется значение по умолчанию: %d\n",
+						level, int(LogLevelPanic), int(LogLevelDebug), int(LogLevelDebug)))
+				}
 			}
 		}
 
@@ -140,4 +147,3 @@ func Fatalf(format string, args ...interface{}) {
 func Fatal(args ...interface{}) {
 	Log.Sugar().Fatal(args...)
 }
-

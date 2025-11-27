@@ -468,19 +468,6 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 	return msg, nil
 }
 
-// getQueueTableName извлекает имя таблицы очереди из имени очереди
-func (qr *QueueReader) getQueueTableName() string {
-	// Формат: SCHEMA.QUEUE_NAME -> обычно SCHEMA.QUEUE_NAME_TABLE
-	parts := strings.Split(qr.queueName, ".")
-	if len(parts) == 2 {
-		schema := parts[0]
-		queueName := parts[1]
-		// Обычно таблица имеет суффикс _TABLE
-		return fmt.Sprintf("%s.%s_TABLE", schema, queueName)
-	}
-	return ""
-}
-
 // ParseXMLMessage парсит XML сообщение из очереди
 // Возвращает map с данными из XML
 // Структура XML: /root/head/date_active_from и /root/body (содержит внутренний XML)
@@ -596,22 +583,6 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// getStringValue безопасно преобразует значение в строку, обрабатывая nil
-func getStringValue(v interface{}) string {
-	if v == nil {
-		return "<NULL>"
-	}
-	switch val := v.(type) {
-	case sql.NullString:
-		if !val.Valid {
-			return "<NULL>"
-		}
-		return val.String
-	default:
-		return fmt.Sprintf("%v", v)
-	}
 }
 
 // GetQueueName возвращает имя очереди

@@ -258,7 +258,7 @@ func (a *SMPPAdapter) Unbind() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.client == nil || !a.IsConnected() {
+	if a.client == nil || !a.isConnected {
 		if logger.Log != nil {
 			logger.Log.Debug("Unbind() не требуется")
 		}
