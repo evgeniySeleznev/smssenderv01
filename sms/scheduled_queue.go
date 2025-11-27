@@ -170,7 +170,7 @@ func (q *ScheduledQueue) worker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			// Graceful shutdown - даем 5 секунд на завершение
+			// Graceful shutdown - даем shutdownTimeout секунд на завершение
 			if logger.Log != nil {
 				logger.Log.Info("Получен сигнал остановки для очереди отложенных SMS, начинаем graceful shutdown")
 			}
