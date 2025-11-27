@@ -39,6 +39,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Таймаут для завершения операций при graceful shutdown
+	// Дает время на завершение отправки SMS и записи в БД
+	const shutdownTimeout = 5 * time.Second
+
 	// Настраиваем обработку сигналов для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	// Обрабатываем основные сигналы, которые работают на всех платформах
@@ -49,10 +53,13 @@ func main() {
 	}
 
 	// Горутина для обработки сигналов
+	shutdownRequested := make(chan struct{})
 	go func() {
 		sig := <-sigChan
-		logger.Log.Info("Получен сигнал, инициируется graceful shutdown", zap.String("signal", sig.String()))
-		cancel()
+		logger.Log.Info("Получен сигнал, инициируется graceful shutdown",
+			zap.String("signal", sig.String()),
+			zap.Duration("shutdownTimeout", shutdownTimeout))
+		close(shutdownRequested)
 	}()
 
 	// Открываем соединение
@@ -155,9 +162,65 @@ func main() {
 			}
 
 			// Обрабатываем и отправляем SMS
-			response, err := smsService.ProcessSMS(*smsMsg)
+			// Передаем контекст для возможности отмены при graceful shutdown
+			response, err := smsService.ProcessSMS(ctx, *smsMsg)
 			if err != nil {
+				// Проверяем, была ли операция отменена из-за graceful shutdown
+				if ctx.Err() == context.Canceled {
+					logger.Log.Warn("Обработка SMS отменена из-за graceful shutdown",
+						zap.Int64("taskID", smsMsg.TaskID))
+					// ВАЖНО: Сообщение уже вычитано из очереди (REMOVE), поэтому ОБЯЗАНЫ сохранить статус в БД
+					// даже если SMS не был отправлен, чтобы зафиксировать факт обработки
+					// Это предотвращает потерю данных при graceful shutdown
+					if response != nil {
+						saveParams := db.SaveSmsResponseParams{
+							TaskID:       response.TaskID,
+							MessageID:    response.MessageID,
+							StatusID:     response.Status,
+							ResponseDate: response.SentAt,
+							ErrorText:    response.ErrorText,
+						}
+						if success, saveErr := dbConn.SaveSmsResponse(ctx, saveParams); !success {
+							if saveErr != nil {
+								// Даже если контекст отменен, пытаемся сохранить статус
+								// Используем background context для критически важной операции сохранения
+								bgCtx := context.Background()
+								if retrySuccess, retryErr := dbConn.SaveSmsResponse(bgCtx, saveParams); !retrySuccess {
+									logger.Log.Error("КРИТИЧЕСКАЯ ОШИБКА: не удалось сохранить статус отмененного SMS в БД",
+										zap.Int64("taskID", response.TaskID),
+										zap.Error(retryErr))
+								} else {
+									logger.Log.Info("Статус отмененного SMS сохранен в БД (использован background context)",
+										zap.Int64("taskID", response.TaskID))
+								}
+							}
+						} else {
+							logger.Log.Info("Статус отмененного SMS сохранен в БД",
+								zap.Int64("taskID", response.TaskID),
+								zap.String("errorText", response.ErrorText))
+						}
+					}
+					continue
+				}
 				logger.Log.Error("Ошибка обработки SMS", zap.Error(err))
+				// Даже при ошибке сохраняем результат в БД (статус ошибки)
+				// Но только если это не отмена контекста
+				if response != nil {
+					saveParams := db.SaveSmsResponseParams{
+						TaskID:       response.TaskID,
+						MessageID:    response.MessageID,
+						StatusID:     response.Status,
+						ResponseDate: response.SentAt,
+						ErrorText:    response.ErrorText,
+					}
+					if success, saveErr := dbConn.SaveSmsResponse(ctx, saveParams); !success {
+						if saveErr != nil && ctx.Err() != context.Canceled {
+							logger.Log.Error("Ошибка сохранения результата SMS в БД",
+								zap.Int64("taskID", response.TaskID),
+								zap.Error(saveErr))
+						}
+					}
+				}
 				continue
 			}
 
@@ -167,6 +230,34 @@ func main() {
 				zap.Int("status", response.Status),
 				zap.String("messageID", response.MessageID),
 				zap.String("errorText", response.ErrorText))
+
+			// Сохраняем результат в БД через процедуру save_sms_response
+			// Передаем контекст для возможности отмены при graceful shutdown
+			// Если SMS был успешно отправлен, пытаемся сохранить результат даже при отмене контекста
+			// (так как SMS уже отправлен, нужно зафиксировать это в БД)
+			saveParams := db.SaveSmsResponseParams{
+				TaskID:       response.TaskID,
+				MessageID:    response.MessageID,
+				StatusID:     response.Status,
+				ResponseDate: response.SentAt,
+				ErrorText:    response.ErrorText,
+			}
+			if success, err := dbConn.SaveSmsResponse(ctx, saveParams); !success {
+				if err != nil {
+					// Проверяем, была ли операция отменена из-за graceful shutdown
+					if ctx.Err() == context.Canceled {
+						// Если SMS был отправлен, но сохранение отменено - это проблема
+						// Логируем предупреждение, так как SMS уже отправлен, но не сохранен в БД
+						logger.Log.Warn("Сохранение результата SMS отменено из-за graceful shutdown (SMS уже отправлен)",
+							zap.Int64("taskID", response.TaskID),
+							zap.String("messageID", response.MessageID))
+					} else {
+						logger.Log.Error("Ошибка сохранения результата SMS в БД",
+							zap.Int64("taskID", response.TaskID),
+							zap.Error(err))
+					}
+				}
+			}
 
 			// Задержка между обработкой сообщений (аналогично C#: Thread.Sleep(20))
 			// НЕ прерываем задержку - сообщения уже вычитаны из очереди и должны быть обработаны
@@ -178,11 +269,46 @@ func main() {
 	// WaitGroup для отслеживания всех обработчиков сообщений
 	var allHandlersWg sync.WaitGroup
 
-	// Запускаем основной цикл обработки очереди
-	runQueueProcessingLoop(ctx, cancel, queueReader, exceptionQueueReader, smsService, dbConn, processExceptionQueue, &allHandlersWg, processMessagesBatch)
+	// Запускаем основной цикл обработки очереди в отдельной горутине
+	// чтобы можно было отслеживать shutdown request
+	go func() {
+		runQueueProcessingLoop(ctx, cancel, queueReader, exceptionQueueReader, smsService, dbConn, processExceptionQueue, &allHandlersWg, processMessagesBatch)
+	}()
 
-	// Graceful shutdown: дожидаемся завершения всех операций
-	performGracefulShutdown(smsService, dbConn, &allHandlersWg)
+	// Ждем сигнала shutdown
+	<-shutdownRequested
+
+	// Создаем контекст с таймаутом для завершения операций
+	// Это дает дополнительное время на завершение отправки SMS и записи в БД
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+
+	logger.Log.Info("Начало graceful shutdown с таймаутом",
+		zap.Duration("timeout", shutdownTimeout))
+
+	// Отменяем основной контекст, чтобы прекратить чтение новых сообщений
+	cancel()
+
+	// Создаем канал для отслеживания завершения операций
+	operationsDone := make(chan struct{})
+	go func() {
+		// Ждем завершения всех обработчиков сообщений
+		allHandlersWg.Wait()
+		close(operationsDone)
+	}()
+
+	// Ждем либо завершения операций, либо истечения таймаута
+	select {
+	case <-operationsDone:
+		logger.Log.Info("Все операции завершены до истечения таймаута")
+	case <-shutdownCtx.Done():
+		logger.Log.Warn("Таймаут graceful shutdown истек, принудительное завершение",
+			zap.Duration("timeout", shutdownTimeout),
+			zap.Int32("activeOperations", dbConn.GetActiveOperationsCount()))
+	}
+
+	// Graceful shutdown: завершаем все компоненты
+	performGracefulShutdown(shutdownCtx, smsService, dbConn, &allHandlersWg)
 }
 
 // runQueueProcessingLoop выполняет основной цикл чтения и обработки сообщений из очереди
@@ -343,9 +469,64 @@ func runQueueProcessingLoop(
 						}
 
 						// Обрабатываем и отправляем SMS из exception queue
-						response, err := smsService.ProcessSMS(*smsMsg)
+						// Передаем контекст для возможности отмены при graceful shutdown
+						response, err := smsService.ProcessSMS(ctx, *smsMsg)
 						if err != nil {
+							// Проверяем, была ли операция отменена из-за graceful shutdown
+							if ctx.Err() == context.Canceled {
+								logger.Log.Warn("Обработка SMS из exception queue отменена из-за graceful shutdown",
+									zap.Int64("taskID", smsMsg.TaskID))
+								// ВАЖНО: Сообщение уже вычитано из exception queue (REMOVE), поэтому ОБЯЗАНЫ сохранить статус в БД
+								// даже если SMS не был отправлен, чтобы зафиксировать факт обработки
+								if response != nil {
+									saveParams := db.SaveSmsResponseParams{
+										TaskID:       response.TaskID,
+										MessageID:    response.MessageID,
+										StatusID:     response.Status,
+										ResponseDate: response.SentAt,
+										ErrorText:    response.ErrorText,
+									}
+									if success, saveErr := dbConn.SaveSmsResponse(ctx, saveParams); !success {
+										if saveErr != nil {
+											// Даже если контекст отменен, пытаемся сохранить статус
+											// Используем background context для критически важной операции сохранения
+											bgCtx := context.Background()
+											if retrySuccess, retryErr := dbConn.SaveSmsResponse(bgCtx, saveParams); !retrySuccess {
+												logger.Log.Error("КРИТИЧЕСКАЯ ОШИБКА: не удалось сохранить статус отмененного SMS из exception queue в БД",
+													zap.Int64("taskID", response.TaskID),
+													zap.Error(retryErr))
+											} else {
+												logger.Log.Info("Статус отмененного SMS из exception queue сохранен в БД (использован background context)",
+													zap.Int64("taskID", response.TaskID))
+											}
+										}
+									} else {
+										logger.Log.Info("Статус отмененного SMS из exception queue сохранен в БД",
+											zap.Int64("taskID", response.TaskID),
+											zap.String("errorText", response.ErrorText))
+									}
+								}
+								continue
+							}
 							logger.Log.Error("Ошибка обработки SMS из exception queue", zap.Error(err))
+							// Даже при ошибке сохраняем результат в БД (статус ошибки)
+							// Но только если это не отмена контекста
+							if response != nil {
+								saveParams := db.SaveSmsResponseParams{
+									TaskID:       response.TaskID,
+									MessageID:    response.MessageID,
+									StatusID:     response.Status,
+									ResponseDate: response.SentAt,
+									ErrorText:    response.ErrorText,
+								}
+								if success, saveErr := dbConn.SaveSmsResponse(ctx, saveParams); !success {
+									if saveErr != nil && ctx.Err() != context.Canceled {
+										logger.Log.Error("Ошибка сохранения результата SMS из exception queue в БД",
+											zap.Int64("taskID", response.TaskID),
+											zap.Error(saveErr))
+									}
+								}
+							}
 							continue
 						}
 
@@ -355,6 +536,34 @@ func runQueueProcessingLoop(
 							zap.Int("status", response.Status),
 							zap.String("messageID", response.MessageID),
 							zap.String("errorText", response.ErrorText))
+
+						// Сохраняем результат в БД через процедуру save_sms_response
+						// Передаем контекст для возможности отмены при graceful shutdown
+						// Если SMS был успешно отправлен, пытаемся сохранить результат даже при отмене контекста
+						// (так как SMS уже отправлен, нужно зафиксировать это в БД)
+						saveParams := db.SaveSmsResponseParams{
+							TaskID:       response.TaskID,
+							MessageID:    response.MessageID,
+							StatusID:     response.Status,
+							ResponseDate: response.SentAt,
+							ErrorText:    response.ErrorText,
+						}
+						if success, err := dbConn.SaveSmsResponse(ctx, saveParams); !success {
+							if err != nil {
+								// Проверяем, была ли операция отменена из-за graceful shutdown
+								if ctx.Err() == context.Canceled {
+									// Если SMS был отправлен, но сохранение отменено - это проблема
+									// Логируем предупреждение, так как SMS уже отправлен, но не сохранен в БД
+									logger.Log.Warn("Сохранение результата SMS из exception queue отменено из-за graceful shutdown (SMS уже отправлен)",
+										zap.Int64("taskID", response.TaskID),
+										zap.String("messageID", response.MessageID))
+								} else {
+									logger.Log.Error("Ошибка сохранения результата SMS из exception queue в БД",
+										zap.Int64("taskID", response.TaskID),
+										zap.Error(err))
+								}
+							}
+						}
 					}
 				}
 			}()
@@ -381,11 +590,53 @@ func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 }
 
 // performGracefulShutdown выполняет корректное завершение всех операций
-func performGracefulShutdown(smsService *sms.Service, dbConn *db.DBConnection, allHandlersWg *sync.WaitGroup) {
-	logger.Log.Info("Начало graceful shutdown...")
+// Принимает контекст с таймаутом для контроля времени завершения
+func performGracefulShutdown(ctx context.Context, smsService *sms.Service, dbConn *db.DBConnection, allHandlersWg *sync.WaitGroup) {
+	logger.Log.Info("Завершение graceful shutdown...")
+
+	// Проверяем, есть ли еще активные операции
+	activeOps := dbConn.GetActiveOperationsCount()
+	if activeOps > 0 {
+		logger.Log.Info("Ожидание завершения активных операций с БД",
+			zap.Int32("activeOperations", activeOps))
+		// Даем дополнительное время на завершение операций с БД
+		// Используем короткий таймаут для проверки
+		checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer checkCancel()
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-checkCtx.Done():
+				logger.Log.Warn("Таймаут ожидания активных операций истек",
+					zap.Int32("remainingOperations", dbConn.GetActiveOperationsCount()))
+				goto shutdown
+			case <-ticker.C:
+				if dbConn.GetActiveOperationsCount() == 0 {
+					logger.Log.Info("Все активные операции с БД завершены")
+					goto shutdown
+				}
+			}
+		}
+	}
+
+shutdown:
 	logger.Log.Info("Ожидание завершения всех обработчиков сообщений...")
-	allHandlersWg.Wait()
-	logger.Log.Info("Все обработчики сообщений завершены")
+	// Используем канал для неблокирующего ожидания
+	done := make(chan struct{})
+	go func() {
+		allHandlersWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Log.Info("Все обработчики сообщений завершены")
+	case <-ctx.Done():
+		logger.Log.Warn("Таймаут ожидания обработчиков истек, принудительное завершение")
+	}
 
 	logger.Log.Info("Остановка механизма периодического переподключения SMPP...")
 	smsService.StopPeriodicRebind()
