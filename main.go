@@ -372,6 +372,12 @@ func runQueueProcessingLoop(
 		// Отправляем сигнал в горутину о получении ответа (независимо от результата)
 		close(iterationSignalChan)
 		if err != nil {
+			// Проверяем, была ли ошибка из-за отмены контекста (graceful shutdown)
+			if ctx.Err() == context.Canceled {
+				logger.Log.Info("Выборка сообщений отменена из-за graceful shutdown")
+				return
+			}
+
 			logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
 			// При ошибке - переподключение
 			logger.Log.Info("Ошибка соединения, переподключение...")
@@ -437,6 +443,11 @@ func runQueueProcessingLoop(
 				// Передаем контекст для возможности отмены операций при graceful shutdown
 				exceptionMessages, err := exceptionQueueReader.DequeueMany(ctx, 100)
 				if err != nil {
+					// Проверяем, была ли ошибка из-за отмены контекста (graceful shutdown)
+					if ctx.Err() == context.Canceled {
+						logger.Log.Info("Выборка сообщений из exception queue отменена из-за graceful shutdown")
+						return
+					}
 					logger.Log.Error("Ошибка при выборке сообщений из exception queue", zap.Error(err))
 					return
 				}

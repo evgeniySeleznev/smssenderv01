@@ -245,10 +245,19 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 	)
 
 	if err != nil {
-		// Откатываем транзакцию при ошибке
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
+		// Проверяем, была ли ошибка из-за отмены контекста (graceful shutdown)
+		isContextCanceled := ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled
+
+		// Откатываем транзакцию при ошибке (если она еще не откачена)
+		if !isContextCanceled {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+				// Игнорируем ошибку "transaction has already been committed or rolled back"
+				if !strings.Contains(rollbackErr.Error(), "already been committed or rolled back") {
+					logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
+				}
+			}
 		}
+
 		// Проверяем, не пуста ли очередь
 		errStr := err.Error()
 		if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
@@ -257,6 +266,16 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 			}
 			return nil, nil
 		}
+
+		// Если ошибка из-за отмены контекста - это нормально при graceful shutdown
+		if isContextCanceled {
+			if logger.Log != nil {
+				logger.Log.Info("Операция dequeue из exception queue отменена из-за graceful shutdown",
+					zap.String("queue", eqr.queueName))
+			}
+			return nil, fmt.Errorf("операция отменена: %w", ctx.Err())
+		}
+
 		if logger.Log != nil {
 			logger.Log.Error("Ошибка выполнения PL/SQL для dequeue из exception queue",
 				zap.Error(err),
@@ -272,9 +291,25 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context) (*QueueM
 	var errorMsg sql.NullString
 	err = tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
+		// Проверяем, была ли ошибка из-за отмены контекста
+		isContextCanceled := ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled
+
+		if !isContextCanceled {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
+				// Игнорируем ошибку "transaction has already been committed or rolled back"
+				if !strings.Contains(rollbackErr.Error(), "already been committed or rolled back") {
+					logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
+				}
+			}
 		}
+
+		if isContextCanceled {
+			if logger.Log != nil {
+				logger.Log.Info("Проверка результата dequeue из exception queue отменена из-за graceful shutdown")
+			}
+			return nil, fmt.Errorf("операция отменена: %w", ctx.Err())
+		}
+
 		return nil, fmt.Errorf("ошибка проверки результата dequeue: %w", err)
 	}
 
