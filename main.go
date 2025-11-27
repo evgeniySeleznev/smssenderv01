@@ -127,11 +127,29 @@ func main() {
 		}
 	}
 
+	// Переменная для хранения shutdown контекста (устанавливается при graceful shutdown)
+	var shutdownCtxForHandlers context.Context
+	var shutdownCtxMu sync.RWMutex
+
 	// Функция для асинхронной обработки батча сообщений
 	// ВАЖНО: Сообщения уже вычитаны из очереди Oracle, поэтому мы ОБЯЗАНЫ обработать их до конца,
 	// иначе они будут потеряны. При graceful shutdown мы прекращаем только чтение новых сообщений,
 	// но продолжаем обрабатывать уже вычитанные.
 	processMessagesBatch := func(ctx context.Context, messages []*db.QueueMessage, batchNum int) {
+		// При graceful shutdown используем shutdownCtx вместо отмененного ctx
+		shutdownCtxMu.RLock()
+		activeCtx := shutdownCtxForHandlers
+		shutdownCtxMu.RUnlock()
+
+		// Если shutdownCtx установлен и основной контекст отменен, используем shutdownCtx
+		if activeCtx != nil && ctx.Err() == context.Canceled {
+			if logger.Log != nil {
+				logger.Log.Info("Используется shutdownCtx для завершения обработки батча",
+					zap.Int("batchNum", batchNum),
+					zap.Int("count", len(messages)))
+			}
+			ctx = activeCtx
+		}
 		logger.Log.Debug("Обработка батча", zap.Int("batchNum", batchNum), zap.Int("count", len(messages)))
 		for i, msg := range messages {
 			// НЕ прерываем обработку уже вычитанных сообщений - они должны быть обработаны до конца
@@ -285,6 +303,12 @@ func main() {
 	// Это дает дополнительное время на завершение отправки SMS и записи в БД
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+
+	// Устанавливаем shutdownCtx для обработчиков сообщений
+	// Это позволит им использовать shutdownCtx вместо отмененного ctx
+	shutdownCtxMu.Lock()
+	shutdownCtxForHandlers = shutdownCtx
+	shutdownCtxMu.Unlock()
 
 	// Отменяем основной контекст, чтобы прекратить чтение новых сообщений
 	// НО уже запущенные операции продолжат работу до истечения shutdownCtx таймаута
