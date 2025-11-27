@@ -206,20 +206,16 @@ func (q *ScheduledQueue) processQueue(ctx context.Context) {
 	}
 
 	// Отправляем сообщения с интервалом 30мс
+	sentCount := 0
 	for i, scheduledMsg := range messages {
 		// Проверяем контекст перед каждой отправкой
 		select {
 		case <-ctx.Done():
-			// Возвращаем необработанные сообщения обратно в очередь
-			remaining := messages[i:]
-			q.mu.Lock()
-			q.messages = append(remaining, q.messages...)
-			q.mu.Unlock()
-
+			// При отмене контекста просто выходим - сообщения будут потеряны при закрытии приложения
 			if logger.Log != nil {
 				logger.Log.Warn("Отправка отложенных SMS прервана из-за graceful shutdown",
-					zap.Int("sent", i),
-					zap.Int("remaining", len(remaining)))
+					zap.Int("sent", sentCount),
+					zap.Int("remaining", len(messages)-sentCount))
 			}
 			return
 		default:
@@ -227,21 +223,17 @@ func (q *ScheduledQueue) processQueue(ctx context.Context) {
 
 		// Отправляем SMS
 		q.sendScheduledMessage(ctx, scheduledMsg)
+		sentCount++
 
 		// Задержка 30мс между отправками (кроме последнего сообщения)
 		if i < len(messages)-1 {
 			select {
 			case <-ctx.Done():
-				// Возвращаем оставшиеся сообщения
-				remaining := messages[i+1:]
-				q.mu.Lock()
-				q.messages = append(remaining, q.messages...)
-				q.mu.Unlock()
-
+				// При отмене контекста просто выходим
 				if logger.Log != nil {
 					logger.Log.Warn("Отправка отложенных SMS прервана во время задержки",
-						zap.Int("sent", i+1),
-						zap.Int("remaining", len(remaining)))
+						zap.Int("sent", sentCount),
+						zap.Int("remaining", len(messages)-sentCount))
 				}
 				return
 			case <-time.After(30 * time.Millisecond):
