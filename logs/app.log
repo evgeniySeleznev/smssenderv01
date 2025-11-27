@@ -10341,3 +10341,185 @@
 {"level":"info","ts":1764242718.0125437,"caller":"0s5/main.go:667","msg":"Graceful shutdown завершен успешно"}
 {"level":"debug","ts":1764242718.0125437,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
 {"level":"info","ts":1764242718.0245926,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}
+{"level":"info","ts":1764242850.917588,"caller":"logger/logger.go:89","msg":"Логгер инициализирован","logLevel":5,"maxArchiveFiles":10,"logDir":"logs"}
+{"level":"info","ts":1764242851.0731554,"caller":"db/oracle_connector.go:304","msg":"Database connection opened (using Oracle Instant Client via godror)"}
+{"level":"info","ts":1764242851.0736675,"caller":"0s5/main.go:70","msg":"Успешно подключено к Oracle базе данных"}
+{"level":"info","ts":1764242851.0736675,"caller":"db/oracle_connector.go:328","msg":"Запущен механизм периодического переподключения к БД","interval":1800}
+{"level":"info","ts":1764242851.0736675,"caller":"0s5/main.go:80","msg":"Конфигурация SMS загружена","silent":false}
+{"level":"info","ts":1764242851.074191,"caller":"sms/service.go:81","msg":"Инициализация SMPP адаптеров..."}
+{"level":"info","ts":1764242851.074191,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":1,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764242851.074191,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":1}
+{"level":"debug","ts":1764242851.074191,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764242851.074191,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764242851.0747097,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764242851.8760133,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764242851.8760133,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764242851.8760133,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764242851.8844535,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"debug","ts":1764242851.8844535,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764242851.8844535,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"info","ts":1764242851.8849902,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":1}
+{"level":"info","ts":1764242851.8849902,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":0,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764242851.8849902,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":0}
+{"level":"debug","ts":1764242851.8849902,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764242851.8855207,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764242851.8855207,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764242852.6870825,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764242852.6870825,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764242852.6870825,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764242852.7157116,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"info","ts":1764242852.7157116,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"debug","ts":1764242852.7157116,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764242852.7157116,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":0}
+{"level":"info","ts":1764242852.716331,"caller":"sms/service.go:129","msg":"Инициализация SMPP адаптеров завершена"}
+{"level":"info","ts":1764242852.716331,"caller":"sms/service.go:165","msg":"Запущен механизм периодического переподключения SMPP","checkInterval":0.5,"rebindIntervalMin":2}
+{"level":"info","ts":1764242852.716331,"caller":"sms/retry.go:169","msg":"Запущен механизм повторных попыток отправки SMS"}
+{"level":"info","ts":1764242852.716855,"caller":"0s5/main.go:100","msg":"Настройки очереди","queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER"}
+{"level":"info","ts":1764242852.716855,"caller":"0s5/main.go:103","msg":"Начало работы с очередью Oracle AQ..."}
+{"level":"debug","ts":1764242852.716855,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764242852.7934763,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F410644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242852.8294194,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F420644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242852.8693552,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F430644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242852.9059389,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F440644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242852.9405236,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F450644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242852.9732993,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F460644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242853.0072916,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F470644E0637303A8C0B7CA","size":510}
+{"level":"info","ts":1764242853.0270157,"caller":"0s5/main.go:427","msg":"Получено сообщений","count":7}
+{"level":"debug","ts":1764242853.027536,"caller":"0s5/main.go:153","msg":"Обработка батча","batchNum":1,"count":7}
+{"level":"debug","ts":1764242853.027536,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":1,"batchNum":1,"messageID":"4492098D5F410644E0637303A8C0B7CA","dequeueTime":1764242852.7934763}
+{"level":"debug","ts":1764242853.0280595,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:32.7934764+03:00\",\n  \"message\": \"msg_1bhOXw8a\",\n  \"message_id\": \"4492098D5F410644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000094\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362041\"\n}"}
+{"level":"debug","ts":1764242853.0280595,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362041,"phone":"+79031000094","message":"msg_1bhOXw8a","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.031043,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000094","text":"msg_1bhOXw8a","messageID":"528809670"}
+{"level":"info","ts":1764242853.031043,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362041,"messageID":"528809670","phone":"9031000094","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.031043,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362041,"status":2,"messageID":"528809670","errorText":""}
+{"level":"info","ts":1764242853.0803983,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362041,"messageID":"528809670","statusID":2,"responseDate":1764242853.031043,"errorText":""}
+{"level":"debug","ts":1764242853.1014345,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":2,"batchNum":1,"messageID":"4492098D5F420644E0637303A8C0B7CA","dequeueTime":1764242852.8294194}
+{"level":"debug","ts":1764242853.1014345,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:32.8294192+03:00\",\n  \"message\": \"msg_JnZosI0p\",\n  \"message_id\": \"4492098D5F420644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000095\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362042\"\n}"}
+{"level":"debug","ts":1764242853.1014345,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362042,"phone":"+79031000095","message":"msg_JnZosI0p","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.1041133,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000095","text":"msg_JnZosI0p","messageID":"528809684"}
+{"level":"info","ts":1764242853.1041133,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362042,"messageID":"528809684","phone":"9031000095","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.1041133,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362042,"status":2,"messageID":"528809684","errorText":""}
+{"level":"info","ts":1764242853.1485584,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362042,"messageID":"528809684","statusID":2,"responseDate":1764242853.1041133,"errorText":""}
+{"level":"debug","ts":1764242853.1695266,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":3,"batchNum":1,"messageID":"4492098D5F430644E0637303A8C0B7CA","dequeueTime":1764242852.8693552}
+{"level":"debug","ts":1764242853.1695836,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:32.8693552+03:00\",\n  \"message\": \"msg_Lxcx2ywV\",\n  \"message_id\": \"4492098D5F430644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000096\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362043\"\n}"}
+{"level":"debug","ts":1764242853.1695836,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362043,"phone":"+79031000096","message":"msg_Lxcx2ywV","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.17224,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000096","text":"msg_Lxcx2ywV","messageID":"528809688"}
+{"level":"info","ts":1764242853.17224,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362043,"messageID":"528809688","phone":"9031000096","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.17224,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362043,"status":2,"messageID":"528809688","errorText":""}
+{"level":"info","ts":1764242853.2196856,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362043,"messageID":"528809688","statusID":2,"responseDate":1764242853.17224,"errorText":""}
+{"level":"debug","ts":1764242853.2407167,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":4,"batchNum":1,"messageID":"4492098D5F440644E0637303A8C0B7CA","dequeueTime":1764242852.9059389}
+{"level":"debug","ts":1764242853.2407167,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:32.9059389+03:00\",\n  \"message\": \"msg_nj2mcofm\",\n  \"message_id\": \"4492098D5F440644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000097\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362044\"\n}"}
+{"level":"debug","ts":1764242853.2407167,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362044,"phone":"+79031000097","message":"msg_nj2mcofm","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.2432954,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000097","text":"msg_nj2mcofm","messageID":"528809695"}
+{"level":"info","ts":1764242853.2432954,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362044,"messageID":"528809695","phone":"9031000097","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.2432954,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362044,"status":2,"messageID":"528809695","errorText":""}
+{"level":"info","ts":1764242853.2904487,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362044,"messageID":"528809695","statusID":2,"responseDate":1764242853.2432954,"errorText":""}
+{"level":"debug","ts":1764242853.3109932,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":5,"batchNum":1,"messageID":"4492098D5F450644E0637303A8C0B7CA","dequeueTime":1764242852.9405236}
+{"level":"debug","ts":1764242853.3109932,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:32.9405236+03:00\",\n  \"message\": \"msg_2UKGuGvV\",\n  \"message_id\": \"4492098D5F450644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000098\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362045\"\n}"}
+{"level":"debug","ts":1764242853.3109932,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362045,"phone":"+79031000098","message":"msg_2UKGuGvV","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.313658,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000098","text":"msg_2UKGuGvV","messageID":"528809716"}
+{"level":"info","ts":1764242853.313658,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362045,"messageID":"528809716","phone":"9031000098","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.313658,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362045,"status":2,"messageID":"528809716","errorText":""}
+{"level":"info","ts":1764242853.3599617,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362045,"messageID":"528809716","statusID":2,"responseDate":1764242853.313658,"errorText":""}
+{"level":"debug","ts":1764242853.3815408,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":6,"batchNum":1,"messageID":"4492098D5F460644E0637303A8C0B7CA","dequeueTime":1764242852.9732993}
+{"level":"debug","ts":1764242853.3815408,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:32.9732992+03:00\",\n  \"message\": \"msg_17UNK4xw\",\n  \"message_id\": \"4492098D5F460644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000099\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362046\"\n}"}
+{"level":"debug","ts":1764242853.3815408,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362046,"phone":"+79031000099","message":"msg_17UNK4xw","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.3842137,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000099","text":"msg_17UNK4xw","messageID":"528809724"}
+{"level":"info","ts":1764242853.3842137,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362046,"messageID":"528809724","phone":"9031000099","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.3842137,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362046,"status":2,"messageID":"528809724","errorText":""}
+{"level":"info","ts":1764242853.4328432,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362046,"messageID":"528809724","statusID":2,"responseDate":1764242853.3842137,"errorText":""}
+{"level":"debug","ts":1764242853.4540265,"caller":"0s5/main.go:158","msg":"Обработка сообщения","messageNum":7,"batchNum":1,"messageID":"4492098D5F470644E0637303A8C0B7CA","dequeueTime":1764242853.0072916}
+{"level":"debug","ts":1764242853.4540265,"caller":"0s5/main.go:173","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 14:25\",\n  \"dequeue_time\": \"2025-11-27T14:27:33.0072916+03:00\",\n  \"message\": \"msg_29oUkH3e\",\n  \"message_id\": \"4492098D5F470644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000100\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3362047\"\n}"}
+{"level":"debug","ts":1764242853.4540265,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3362047,"phone":"+79031000100","message":"msg_29oUkH3e","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764242853.4560277,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000100","text":"msg_29oUkH3e","messageID":"528809728"}
+{"level":"info","ts":1764242853.4560277,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3362047,"messageID":"528809728","phone":"9031000100","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764242853.4560277,"caller":"0s5/main.go:246","msg":"Результат отправки SMS","taskID":3362047,"status":2,"messageID":"528809728","errorText":""}
+{"level":"info","ts":1764242853.5087929,"caller":"db/sms_response.go:213","msg":"Вызов pcsystem.pkg_sms.save_sms_response() успешно","taskID":3362047,"messageID":"528809728","statusID":2,"responseDate":1764242853.4560277,"errorText":""}
+{"level":"debug","ts":1764242853.5296533,"caller":"0s5/main.go:284","msg":"Батч обработан","batchNum":1}
+{"level":"debug","ts":1764242853.5296533,"caller":"0s5/main.go:460","msg":"Все батчи обработаны"}
+{"level":"debug","ts":1764242854.029689,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764242864.0937786,"caller":"0s5/main.go:424","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764242864.594195,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764242869.462925,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F480644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.5040135,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F490644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.5397472,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F4A0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.57827,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F4B0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.6161594,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F4C0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.6539412,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F4D0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.691044,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F4E0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.7292228,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F4F0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.76554,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F500644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.8012586,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F510644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.8392987,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F520644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.879517,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F530644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.9150653,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F540644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.9511766,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F550644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242869.9861066,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F560644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.0208802,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F570644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.0573769,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F580644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.0906003,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F590644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.1235845,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F5A0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.1580024,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F5B0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.192491,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F5C0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.2272553,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F5D0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.2646272,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F5E0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.2991004,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F5F0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.3322158,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F600644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.3656712,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F610644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.401656,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F620644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.439918,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F630644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.4742773,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F640644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.508829,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F650644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.5448508,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F660644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.585209,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F670644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.6200154,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F680644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.657765,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F690644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.690876,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F6A0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.7245636,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F6B0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.7601767,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F6C0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.7938428,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F6D0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.8287625,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F6E0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.8647892,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F6F0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.9002993,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F700644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.9334407,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F710644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242870.9775355,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F720644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.0191646,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F730644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.0564992,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F740644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.1167545,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F750644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.1699955,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F760644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.2059786,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F770644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.24135,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F780644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.27632,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F790644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.3121858,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F7A0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.3472438,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F7B0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.388369,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F7C0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.431371,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F7D0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764242871.4683943,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F7E0644E0637303A8C0B7CA","size":510}
+{"level":"info","ts":1764242871.4963644,"caller":"0s5/main.go:59","msg":"Получен сигнал, инициируется graceful shutdown","signal":"interrupt","shutdownTimeout":5}
+{"level":"info","ts":1764242871.4963644,"caller":"0s5/main.go:299","msg":"Начало graceful shutdown с таймаутом","timeout":5}
+{"level":"info","ts":1764242871.496909,"caller":"0s5/main.go:328","msg":"Все операции завершены до истечения таймаута"}
+{"level":"info","ts":1764242871.496909,"caller":"0s5/main.go:631","msg":"Завершение graceful shutdown..."}
+{"level":"info","ts":1764242871.496909,"caller":"0s5/main.go:636","msg":"Ожидание завершения активных операций с БД","activeOperations":1}
+{"level":"debug","ts":1764242871.5039535,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5F7F0644E0637303A8C0B7CA","size":510}
+{"level":"info","ts":1764242871.5044823,"caller":"db/queue_reader.go:110","msg":"Операция чтения из очереди прервана","received":56}
+{"level":"info","ts":1764242871.5044823,"caller":"0s5/main.go:402","msg":"Выборка сообщений отменена из-за graceful shutdown"}
+{"level":"info","ts":1764242871.9983938,"caller":"0s5/main.go:654","msg":"Все активные операции с БД завершены"}
+{"level":"info","ts":1764242871.9983938,"caller":"0s5/main.go:662","msg":"Ожидание завершения всех обработчиков сообщений..."}
+{"level":"info","ts":1764242871.9983938,"caller":"0s5/main.go:672","msg":"Все обработчики сообщений завершены"}
+{"level":"info","ts":1764242871.9983938,"caller":"0s5/main.go:677","msg":"Остановка механизма периодического переподключения SMPP..."}
+{"level":"info","ts":1764242871.9990442,"caller":"sms/service.go:214","msg":"Остановка механизма периодического переподключения SMPP"}
+{"level":"info","ts":1764242871.9990442,"caller":"0s5/main.go:680","msg":"Остановка механизма повторных попыток отправки SMS..."}
+{"level":"info","ts":1764242871.9990442,"caller":"sms/retry.go:186","msg":"Остановка механизма повторных попыток отправки SMS"}
+{"level":"info","ts":1764242871.9990442,"caller":"0s5/main.go:683","msg":"Закрытие SMPP адаптеров..."}
+{"level":"info","ts":1764242872.0013816,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":1}
+{"level":"debug","ts":1764242872.0013816,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:60908->217.23.128.68:3700: use of closed network connection"}
+{"level":"warn","ts":1764242872.0013816,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:60908->217.23.128.68:3700: use of closed network connection"}
+{"level":"debug","ts":1764242872.0013816,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"info","ts":1764242872.003408,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":0}
+{"level":"debug","ts":1764242872.003408,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:60909->217.23.128.68:3700: use of closed network connection"}
+{"level":"info","ts":1764242872.003408,"caller":"0s5/main.go:688","msg":"Остановка механизма периодического переподключения к БД..."}
+{"level":"warn","ts":1764242872.003408,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:60909->217.23.128.68:3700: use of closed network connection"}
+{"level":"info","ts":1764242872.003408,"caller":"db/oracle_connector.go:349","msg":"Остановка механизма периодического переподключения к БД"}
+{"level":"debug","ts":1764242872.0039363,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"info","ts":1764242872.0039363,"caller":"0s5/main.go:691","msg":"Graceful shutdown завершен успешно"}
+{"level":"info","ts":1764242872.017494,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}

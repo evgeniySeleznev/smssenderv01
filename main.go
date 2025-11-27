@@ -142,15 +142,20 @@ func main() {
 		shutdownCtxMu.RUnlock()
 
 		// Если shutdownCtx установлен и основной контекст отменен, используем shutdownCtx
-		if activeCtx != nil && ctx.Err() == context.Canceled {
+		originalCtxCanceled := ctx.Err() == context.Canceled
+		if activeCtx != nil && originalCtxCanceled {
 			if logger.Log != nil {
 				logger.Log.Info("Используется shutdownCtx для завершения обработки батча",
 					zap.Int("batchNum", batchNum),
-					zap.Int("count", len(messages)))
+					zap.Int("count", len(messages)),
+					zap.Bool("originalCtxCanceled", originalCtxCanceled))
 			}
 			ctx = activeCtx
 		}
-		logger.Log.Debug("Обработка батча", zap.Int("batchNum", batchNum), zap.Int("count", len(messages)))
+		logger.Log.Debug("Обработка батча",
+			zap.Int("batchNum", batchNum),
+			zap.Int("count", len(messages)),
+			zap.Bool("usingShutdownCtx", activeCtx != nil && originalCtxCanceled))
 		for i, msg := range messages {
 			// НЕ прерываем обработку уже вычитанных сообщений - они должны быть обработаны до конца
 			// Проверка контекста здесь только для логирования, но не для прерывания
@@ -310,6 +315,10 @@ func main() {
 	shutdownCtxForHandlers = shutdownCtx
 	shutdownCtxMu.Unlock()
 
+	if logger.Log != nil {
+		logger.Log.Info("shutdownCtx установлен для обработчиков сообщений, отменяем основной контекст")
+	}
+
 	// Отменяем основной контекст, чтобы прекратить чтение новых сообщений
 	// НО уже запущенные операции продолжат работу до истечения shutdownCtx таймаута
 	cancel()
@@ -431,13 +440,9 @@ func runQueueProcessingLoop(
 			var wg sync.WaitGroup
 
 			for i := 0; i < len(messages); i += batchSize {
-				// Проверяем контекст перед запуском нового батча
-				if ctx.Err() != nil {
-					logger.Log.Info("Получен сигнал остановки, прекращаем запуск новых батчей",
-						zap.Int("processed", i),
-						zap.Int("total", len(messages)))
-					break
-				}
+				// НЕ проверяем контекст здесь - сообщения уже вычитаны из очереди
+				// и должны быть обработаны до конца, даже при graceful shutdown
+				// Проверка контекста происходит внутри processMessagesBatch
 
 				end := i + batchSize
 				if end > len(messages) {

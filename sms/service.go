@@ -274,21 +274,9 @@ func (s *Service) SetTestPhoneGetter(getter TestPhoneGetter) {
 // Принимает контекст для возможности отмены операций при graceful shutdown
 // Если контекст отменен, SMS не отправляется и возвращается ошибка
 func (s *Service) ProcessSMS(ctx context.Context, msg SMSMessage) (*SMSResponse, error) {
-	// Проверяем контекст перед началом обработки
-	// Если контекст отменен (graceful shutdown), не отправляем SMS
-	if ctx.Err() == context.Canceled {
-		errText := "Обработка SMS отменена из-за graceful shutdown"
-		if logger.Log != nil {
-			logger.Log.Warn(errText, zap.Int64("taskID", msg.TaskID))
-		}
-		return &SMSResponse{
-			TaskID:    msg.TaskID,
-			MessageID: "",
-			Status:    3, // ошибка
-			ErrorText: errText,
-			SentAt:    time.Now(),
-		}, fmt.Errorf("операция отменена: %w", ctx.Err())
-	}
+	// НЕ проверяем контекст здесь - проверка происходит в вызывающем коде
+	// При graceful shutdown вызывающий код заменяет отмененный контекст на shutdownCtx с таймаутом
+	// Это позволяет завершить критически важные операции (отправка SMS и сохранение в БД)
 
 	// Получение адаптера по SMPPID
 	s.mu.RLock()
@@ -377,21 +365,9 @@ func (s *Service) ProcessSMS(ctx context.Context, msg SMSMessage) (*SMSResponse,
 		}
 	}
 
-	// Проверяем контекст перед отправкой SMS
-	// Если контекст отменен (graceful shutdown), не отправляем SMS
-	if ctx.Err() == context.Canceled {
-		errText := "Отправка SMS отменена из-за graceful shutdown"
-		if logger.Log != nil {
-			logger.Log.Warn(errText, zap.Int64("taskID", msg.TaskID))
-		}
-		return &SMSResponse{
-			TaskID:    msg.TaskID,
-			MessageID: "",
-			Status:    3, // ошибка
-			ErrorText: errText,
-			SentAt:    time.Now(),
-		}, fmt.Errorf("операция отменена: %w", ctx.Err())
-	}
+	// НЕ проверяем контекст здесь - проверка происходит в вызывающем коде
+	// При graceful shutdown вызывающий код заменяет отмененный контекст на shutdownCtx с таймаутом
+	// Это позволяет завершить критически важные операции (отправка SMS и сохранение в БД)
 
 	// Отправка SMS
 	messageID, err := s.sendSMS(msg, smppCfg, phoneNumber)
