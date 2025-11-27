@@ -28,12 +28,12 @@ type DeliveryReceiptQueue struct {
 	startMu sync.Mutex
 
 	// Статистика
-	statsMu        sync.Mutex
-	totalReceived  int64
-	totalSaved     int64
-	totalFailed    int64
-	batchesSaved   int64
-	lastFlushTime  time.Time
+	statsMu         sync.Mutex
+	totalReceived   int64
+	totalSaved      int64
+	totalFailed     int64
+	batchesSaved    int64
+	lastFlushTime   time.Time
 	shutdownTimeout time.Duration
 }
 
@@ -41,11 +41,11 @@ type DeliveryReceiptQueue struct {
 func NewDeliveryReceiptQueue(saveFunc DeliveryReceiptSaveFunc) *DeliveryReceiptQueue {
 	return &DeliveryReceiptQueue{
 		saveFunc:        saveFunc,
-		batchSize:       100,              // Сохранять по 100 штук
-		flushInterval:   2 * time.Second,  // Или каждые 2 секунды
-		queueSize:       10000,            // Буфер на 10000 receipts
+		batchSize:       100,             // Сохранять по 100 штук
+		flushInterval:   2 * time.Second, // Или каждые 2 секунды
+		queueSize:       10000,           // Буфер на 10000 receipts
 		stopCh:          make(chan struct{}),
-		shutdownTimeout: 5 * time.Second,  // Таймаут graceful shutdown
+		shutdownTimeout: 5 * time.Second, // Таймаут graceful shutdown
 	}
 }
 
@@ -232,7 +232,7 @@ func (q *DeliveryReceiptQueue) drainAndSave(currentBatch []*DeliveryReceipt) {
 
 	// Затем вычитываем и сохраняем оставшиеся из очереди
 	batch := make([]*DeliveryReceipt, 0, q.batchSize)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -318,4 +318,3 @@ func (q *DeliveryReceiptQueue) saveBatch(batch []*DeliveryReceipt) {
 		}
 	}
 }
-
