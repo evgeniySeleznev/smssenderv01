@@ -212,3 +212,321 @@
 {"level":"debug","ts":1764239141.9948356,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
 {"level":"info","ts":1764239141.9948356,"caller":"0s5/main.go:655","msg":"Graceful shutdown завершен успешно"}
 {"level":"info","ts":1764239142.0123477,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}
+{"level":"info","ts":1764239392.3821185,"caller":"logger/logger.go:89","msg":"Логгер инициализирован","logLevel":5,"maxArchiveFiles":10,"logDir":"logs"}
+{"level":"info","ts":1764239392.5448854,"caller":"db/oracle_connector.go:304","msg":"Database connection opened (using Oracle Instant Client via godror)"}
+{"level":"info","ts":1764239392.5448854,"caller":"0s5/main.go:70","msg":"Успешно подключено к Oracle базе данных"}
+{"level":"info","ts":1764239392.5454037,"caller":"0s5/main.go:80","msg":"Конфигурация SMS загружена","silent":false}
+{"level":"info","ts":1764239392.5454037,"caller":"db/oracle_connector.go:328","msg":"Запущен механизм периодического переподключения к БД","interval":1800}
+{"level":"info","ts":1764239392.5454037,"caller":"sms/service.go:81","msg":"Инициализация SMPP адаптеров..."}
+{"level":"info","ts":1764239392.5454037,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":1,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764239392.5454037,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":1}
+{"level":"debug","ts":1764239392.545922,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239392.545922,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239392.545922,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239393.3472033,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239393.3472033,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239393.3472033,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239393.3628569,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"info","ts":1764239393.3633914,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"debug","ts":1764239393.3633914,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239393.3633914,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":1}
+{"level":"info","ts":1764239393.3633914,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":0,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764239393.3639238,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":0}
+{"level":"debug","ts":1764239393.3639238,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239393.3639238,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239393.3639238,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239394.1647127,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239394.1647997,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239394.1647997,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239394.2019894,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"debug","ts":1764239394.2019894,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239394.2019894,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"info","ts":1764239394.2019894,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":0}
+{"level":"info","ts":1764239394.2025154,"caller":"sms/service.go:129","msg":"Инициализация SMPP адаптеров завершена"}
+{"level":"info","ts":1764239394.2025154,"caller":"sms/service.go:165","msg":"Запущен механизм периодического переподключения SMPP","checkInterval":0.5,"rebindIntervalMin":2}
+{"level":"info","ts":1764239394.2025154,"caller":"sms/retry.go:169","msg":"Запущен механизм повторных попыток отправки SMS"}
+{"level":"info","ts":1764239394.2030215,"caller":"0s5/main.go:100","msg":"Настройки очереди","queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER"}
+{"level":"info","ts":1764239394.2030492,"caller":"0s5/main.go:103","msg":"Начало работы с очередью Oracle AQ..."}
+{"level":"debug","ts":1764239394.2030492,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239404.2866786,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239404.7882142,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"info","ts":1764239407.439566,"caller":"0s5/main.go:59","msg":"Получен сигнал, инициируется graceful shutdown","signal":"interrupt","shutdownTimeout":5}
+{"level":"info","ts":1764239407.439566,"caller":"0s5/main.go:286","msg":"Начало graceful shutdown с таймаутом","timeout":5}
+{"level":"info","ts":1764239407.439566,"caller":"0s5/main.go:303","msg":"Все операции завершены до истечения таймаута"}
+{"level":"info","ts":1764239407.440114,"caller":"0s5/main.go:606","msg":"Завершение graceful shutdown..."}
+{"level":"info","ts":1764239407.440114,"caller":"0s5/main.go:611","msg":"Ожидание завершения активных операций с БД","activeOperations":1}
+{"level":"info","ts":1764239407.4601176,"caller":"db/queue_reader.go:338","msg":"Операция dequeue отменена из-за graceful shutdown","consumer":"SUB_SMS_SENDER","queue":"ASKAQ.AQ_ASK"}
+{"level":"info","ts":1764239407.4601176,"caller":"db/queue_reader.go:132","msg":"Операция чтения из очереди прервана из-за отмены контекста","received":0}
+{"level":"info","ts":1764239407.4601176,"caller":"0s5/main.go:377","msg":"Выборка сообщений отменена из-за graceful shutdown"}
+{"level":"info","ts":1764239407.9405503,"caller":"0s5/main.go:629","msg":"Все активные операции с БД завершены"}
+{"level":"info","ts":1764239407.9405503,"caller":"0s5/main.go:637","msg":"Ожидание завершения всех обработчиков сообщений..."}
+{"level":"info","ts":1764239407.9405503,"caller":"0s5/main.go:647","msg":"Все обработчики сообщений завершены"}
+{"level":"info","ts":1764239407.9405503,"caller":"0s5/main.go:652","msg":"Остановка механизма периодического переподключения SMPP..."}
+{"level":"info","ts":1764239407.9405503,"caller":"sms/service.go:214","msg":"Остановка механизма периодического переподключения SMPP"}
+{"level":"info","ts":1764239407.9405503,"caller":"0s5/main.go:655","msg":"Остановка механизма повторных попыток отправки SMS..."}
+{"level":"info","ts":1764239407.9411695,"caller":"sms/retry.go:186","msg":"Остановка механизма повторных попыток отправки SMS"}
+{"level":"info","ts":1764239407.9411695,"caller":"0s5/main.go:658","msg":"Закрытие SMPP адаптеров..."}
+{"level":"info","ts":1764239407.9439306,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":0}
+{"level":"debug","ts":1764239407.9439306,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59083->212.24.33.196:3700: use of closed network connection"}
+{"level":"warn","ts":1764239407.9439306,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59083->212.24.33.196:3700: use of closed network connection"}
+{"level":"debug","ts":1764239407.944453,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"debug","ts":1764239407.9463766,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59082->212.24.33.196:3700: use of closed network connection"}
+{"level":"info","ts":1764239407.9463766,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":1}
+{"level":"warn","ts":1764239407.9463766,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59082->212.24.33.196:3700: use of closed network connection"}
+{"level":"info","ts":1764239407.9463766,"caller":"0s5/main.go:663","msg":"Остановка механизма периодического переподключения к БД..."}
+{"level":"debug","ts":1764239407.9463766,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"info","ts":1764239407.9469047,"caller":"db/oracle_connector.go:349","msg":"Остановка механизма периодического переподключения к БД"}
+{"level":"info","ts":1764239407.9469047,"caller":"0s5/main.go:666","msg":"Graceful shutdown завершен успешно"}
+{"level":"info","ts":1764239407.9620821,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}
+{"level":"info","ts":1764239451.4822252,"caller":"logger/logger.go:89","msg":"Логгер инициализирован","logLevel":5,"maxArchiveFiles":10,"logDir":"logs"}
+{"level":"info","ts":1764239451.635013,"caller":"db/oracle_connector.go:304","msg":"Database connection opened (using Oracle Instant Client via godror)"}
+{"level":"info","ts":1764239451.635013,"caller":"0s5/main.go:70","msg":"Успешно подключено к Oracle базе данных"}
+{"level":"info","ts":1764239451.635013,"caller":"db/oracle_connector.go:328","msg":"Запущен механизм периодического переподключения к БД","interval":1800}
+{"level":"info","ts":1764239451.635013,"caller":"0s5/main.go:80","msg":"Конфигурация SMS загружена","silent":false}
+{"level":"info","ts":1764239451.635013,"caller":"sms/service.go:81","msg":"Инициализация SMPP адаптеров..."}
+{"level":"info","ts":1764239451.6355429,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":0,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764239451.6355429,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":0}
+{"level":"debug","ts":1764239451.6355429,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239451.6355429,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239451.6355429,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239452.4372296,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239452.4372296,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239452.4372296,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239452.4500492,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"info","ts":1764239452.4500492,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"debug","ts":1764239452.4500492,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239452.4500492,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":0}
+{"level":"info","ts":1764239452.4500492,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":1,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764239452.45111,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":1}
+{"level":"debug","ts":1764239452.45111,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239452.45111,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239452.45111,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239453.2531054,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239453.2531054,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239453.2531054,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239453.270688,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"info","ts":1764239453.270688,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"debug","ts":1764239453.270688,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239453.270688,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":1}
+{"level":"info","ts":1764239453.2712169,"caller":"sms/service.go:129","msg":"Инициализация SMPP адаптеров завершена"}
+{"level":"info","ts":1764239453.2712169,"caller":"sms/service.go:165","msg":"Запущен механизм периодического переподключения SMPP","checkInterval":0.5,"rebindIntervalMin":2}
+{"level":"info","ts":1764239453.2712169,"caller":"sms/retry.go:169","msg":"Запущен механизм повторных попыток отправки SMS"}
+{"level":"info","ts":1764239453.2712169,"caller":"0s5/main.go:100","msg":"Настройки очереди","queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER"}
+{"level":"info","ts":1764239453.27187,"caller":"0s5/main.go:103","msg":"Начало работы с очередью Oracle AQ..."}
+{"level":"debug","ts":1764239453.27187,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239463.3578665,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239463.8580856,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"info","ts":1764239465.8361218,"caller":"0s5/main.go:59","msg":"Получен сигнал, инициируется graceful shutdown","signal":"interrupt","shutdownTimeout":5}
+{"level":"info","ts":1764239465.8361218,"caller":"0s5/main.go:286","msg":"Начало graceful shutdown с таймаутом","timeout":5}
+{"level":"info","ts":1764239465.8361218,"caller":"0s5/main.go:303","msg":"Все операции завершены до истечения таймаута"}
+{"level":"info","ts":1764239465.8366292,"caller":"0s5/main.go:606","msg":"Завершение graceful shutdown..."}
+{"level":"info","ts":1764239465.8367605,"caller":"0s5/main.go:611","msg":"Ожидание завершения активных операций с БД","activeOperations":1}
+{"level":"info","ts":1764239465.8547351,"caller":"db/queue_reader.go:338","msg":"Операция dequeue отменена из-за graceful shutdown","consumer":"SUB_SMS_SENDER","queue":"ASKAQ.AQ_ASK"}
+{"level":"info","ts":1764239465.8547351,"caller":"db/queue_reader.go:132","msg":"Операция чтения из очереди прервана из-за отмены контекста","received":0}
+{"level":"info","ts":1764239465.8547351,"caller":"0s5/main.go:377","msg":"Выборка сообщений отменена из-за graceful shutdown"}
+{"level":"info","ts":1764239466.337144,"caller":"0s5/main.go:629","msg":"Все активные операции с БД завершены"}
+{"level":"info","ts":1764239466.3372045,"caller":"0s5/main.go:637","msg":"Ожидание завершения всех обработчиков сообщений..."}
+{"level":"info","ts":1764239466.3372045,"caller":"0s5/main.go:647","msg":"Все обработчики сообщений завершены"}
+{"level":"info","ts":1764239466.3372045,"caller":"0s5/main.go:652","msg":"Остановка механизма периодического переподключения SMPP..."}
+{"level":"info","ts":1764239466.3372045,"caller":"sms/service.go:214","msg":"Остановка механизма периодического переподключения SMPP"}
+{"level":"info","ts":1764239466.3377163,"caller":"0s5/main.go:655","msg":"Остановка механизма повторных попыток отправки SMS..."}
+{"level":"info","ts":1764239466.3377464,"caller":"sms/retry.go:186","msg":"Остановка механизма повторных попыток отправки SMS"}
+{"level":"info","ts":1764239466.3377464,"caller":"0s5/main.go:658","msg":"Закрытие SMPP адаптеров..."}
+{"level":"info","ts":1764239466.3402026,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":1}
+{"level":"debug","ts":1764239466.3402026,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59102->212.24.33.196:3700: use of closed network connection"}
+{"level":"warn","ts":1764239466.3402026,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59102->212.24.33.196:3700: use of closed network connection"}
+{"level":"debug","ts":1764239466.3402026,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"debug","ts":1764239466.3427942,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59101->212.24.33.196:3700: use of closed network connection"}
+{"level":"info","ts":1764239466.3427942,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":0}
+{"level":"warn","ts":1764239466.3427942,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59101->212.24.33.196:3700: use of closed network connection"}
+{"level":"info","ts":1764239466.3427942,"caller":"0s5/main.go:663","msg":"Остановка механизма периодического переподключения к БД..."}
+{"level":"debug","ts":1764239466.3427942,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"info","ts":1764239466.343319,"caller":"db/oracle_connector.go:349","msg":"Остановка механизма периодического переподключения к БД"}
+{"level":"info","ts":1764239466.343319,"caller":"0s5/main.go:666","msg":"Graceful shutdown завершен успешно"}
+{"level":"info","ts":1764239466.3561368,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}
+{"level":"info","ts":1764239550.298833,"caller":"logger/logger.go:89","msg":"Логгер инициализирован","logLevel":5,"maxArchiveFiles":10,"logDir":"logs"}
+{"level":"info","ts":1764239550.4570594,"caller":"db/oracle_connector.go:304","msg":"Database connection opened (using Oracle Instant Client via godror)"}
+{"level":"info","ts":1764239550.4575763,"caller":"0s5/main.go:70","msg":"Успешно подключено к Oracle базе данных"}
+{"level":"info","ts":1764239550.4575763,"caller":"db/oracle_connector.go:328","msg":"Запущен механизм периодического переподключения к БД","interval":1800}
+{"level":"info","ts":1764239550.4575763,"caller":"0s5/main.go:80","msg":"Конфигурация SMS загружена","silent":false}
+{"level":"info","ts":1764239550.4581032,"caller":"sms/service.go:81","msg":"Инициализация SMPP адаптеров..."}
+{"level":"info","ts":1764239550.4581032,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":0,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764239550.4581032,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":0}
+{"level":"debug","ts":1764239550.4581032,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239550.4586284,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239550.4586284,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239551.2593522,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239551.2593522,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239551.2593522,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239551.30013,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"info","ts":1764239551.30013,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"debug","ts":1764239551.30013,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239551.30013,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":0}
+{"level":"info","ts":1764239551.300635,"caller":"sms/service.go:87","msg":"Инициализация SMPP адаптера","smppID":1,"host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"info","ts":1764239551.3006532,"caller":"sms/service.go:109","msg":"Предварительное подключение SMPP","smppID":1}
+{"level":"debug","ts":1764239551.3006532,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239551.3006532,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239551.3006532,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239552.1025574,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239552.1025574,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239552.1025574,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239552.1389601,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"debug","ts":1764239552.1389601,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239552.1389601,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"info","ts":1764239552.139468,"caller":"sms/service.go:120","msg":"SMPP адаптер успешно подключен","smppID":1}
+{"level":"info","ts":1764239552.1394975,"caller":"sms/service.go:129","msg":"Инициализация SMPP адаптеров завершена"}
+{"level":"info","ts":1764239552.1394975,"caller":"sms/service.go:165","msg":"Запущен механизм периодического переподключения SMPP","checkInterval":0.5,"rebindIntervalMin":2}
+{"level":"info","ts":1764239552.1394975,"caller":"sms/retry.go:169","msg":"Запущен механизм повторных попыток отправки SMS"}
+{"level":"info","ts":1764239552.1394975,"caller":"0s5/main.go:100","msg":"Настройки очереди","queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER"}
+{"level":"info","ts":1764239552.1400464,"caller":"0s5/main.go:103","msg":"Начало работы с очередью Oracle AQ..."}
+{"level":"debug","ts":1764239552.1400464,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239562.2329865,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239562.7336898,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239572.855804,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239573.3566208,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239581.3276935,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5A2B0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764239581.369043,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5A2C0644E0637303A8C0B7CA","size":510}
+{"level":"debug","ts":1764239581.412049,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5A2D0644E0637303A8C0B7CA","size":510}
+{"level":"info","ts":1764239581.4387922,"caller":"0s5/main.go:402","msg":"Получено сообщений","count":3}
+{"level":"debug","ts":1764239581.4387922,"caller":"0s5/main.go:135","msg":"Обработка батча","batchNum":1,"count":3}
+{"level":"debug","ts":1764239581.4387922,"caller":"0s5/main.go:140","msg":"Обработка сообщения","messageNum":1,"batchNum":1,"messageID":"4492098D5A2B0644E0637303A8C0B7CA","dequeueTime":1764239581.3276935}
+{"level":"debug","ts":1764239581.439311,"caller":"0s5/main.go:155","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 13:33\",\n  \"dequeue_time\": \"2025-11-27T13:33:01.3276936+03:00\",\n  \"message\": \"msg_vjmMaJyJ\",\n  \"message_id\": \"4492098D5A2B0644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000001\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3360739\"\n}"}
+{"level":"debug","ts":1764239581.439311,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3360739,"phone":"+79031000001","message":"msg_vjmMaJyJ","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764239581.4419782,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000001","text":"msg_vjmMaJyJ","messageID":"528588462"}
+{"level":"info","ts":1764239581.4419782,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3360739,"messageID":"528588462","phone":"9031000001","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764239581.4419782,"caller":"0s5/main.go:228","msg":"Результат отправки SMS","taskID":3360739,"status":2,"messageID":"528588462","errorText":""}
+{"level":"error","ts":1764239581.4822261,"caller":"db/sms_response.go:116","msg":"Ошибка вызова pcsystem.pkg_sms.save_sms_response","taskID":3360739,"messageID":"528588462","statusID":2,"error":"6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"oracle-client/db.(*DBConnection).SaveSmsResponse\n\tB:/0s5/db/sms_response.go:116\nmain.main.func2\n\tB:/0s5/main.go:245\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"error","ts":1764239581.4827602,"caller":"0s5/main.go:255","msg":"Ошибка сохранения результата SMS в БД","taskID":3360739,"error":"ошибка вызова save_sms_response: 6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"main.main.func2\n\tB:/0s5/main.go:255\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"debug","ts":1764239581.5029507,"caller":"0s5/main.go:140","msg":"Обработка сообщения","messageNum":2,"batchNum":1,"messageID":"4492098D5A2C0644E0637303A8C0B7CA","dequeueTime":1764239581.369043}
+{"level":"debug","ts":1764239581.5030007,"caller":"0s5/main.go:155","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 13:33\",\n  \"dequeue_time\": \"2025-11-27T13:33:01.3690431+03:00\",\n  \"message\": \"msg_LE4DdShE\",\n  \"message_id\": \"4492098D5A2C0644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000002\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3360740\"\n}"}
+{"level":"debug","ts":1764239581.5035276,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3360740,"phone":"+79031000002","message":"msg_LE4DdShE","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764239581.505913,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000002","text":"msg_LE4DdShE","messageID":"528588466"}
+{"level":"info","ts":1764239581.505913,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3360740,"messageID":"528588466","phone":"9031000002","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764239581.505913,"caller":"0s5/main.go:228","msg":"Результат отправки SMS","taskID":3360740,"status":2,"messageID":"528588466","errorText":""}
+{"level":"error","ts":1764239581.5338686,"caller":"db/sms_response.go:116","msg":"Ошибка вызова pcsystem.pkg_sms.save_sms_response","taskID":3360740,"messageID":"528588466","statusID":2,"error":"6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"oracle-client/db.(*DBConnection).SaveSmsResponse\n\tB:/0s5/db/sms_response.go:116\nmain.main.func2\n\tB:/0s5/main.go:245\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"error","ts":1764239581.5338686,"caller":"0s5/main.go:255","msg":"Ошибка сохранения результата SMS в БД","taskID":3360740,"error":"ошибка вызова save_sms_response: 6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"main.main.func2\n\tB:/0s5/main.go:255\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"debug","ts":1764239581.5560777,"caller":"0s5/main.go:140","msg":"Обработка сообщения","messageNum":3,"batchNum":1,"messageID":"4492098D5A2D0644E0637303A8C0B7CA","dequeueTime":1764239581.412049}
+{"level":"debug","ts":1764239581.5560777,"caller":"0s5/main.go:155","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 13:33\",\n  \"dequeue_time\": \"2025-11-27T13:33:01.4120492+03:00\",\n  \"message\": \"msg_KUBruZYH\",\n  \"message_id\": \"4492098D5A2D0644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000003\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3360741\"\n}"}
+{"level":"debug","ts":1764239581.5560777,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3360741,"phone":"+79031000003","message":"msg_KUBruZYH","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764239581.5592875,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000003","text":"msg_KUBruZYH","messageID":"528588473"}
+{"level":"info","ts":1764239581.5593193,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3360741,"messageID":"528588473","phone":"9031000003","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764239581.5593193,"caller":"0s5/main.go:228","msg":"Результат отправки SMS","taskID":3360741,"status":2,"messageID":"528588473","errorText":""}
+{"level":"error","ts":1764239581.5848632,"caller":"db/sms_response.go:116","msg":"Ошибка вызова pcsystem.pkg_sms.save_sms_response","taskID":3360741,"messageID":"528588473","statusID":2,"error":"6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"oracle-client/db.(*DBConnection).SaveSmsResponse\n\tB:/0s5/db/sms_response.go:116\nmain.main.func2\n\tB:/0s5/main.go:245\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"error","ts":1764239581.58541,"caller":"0s5/main.go:255","msg":"Ошибка сохранения результата SMS в БД","taskID":3360741,"error":"ошибка вызова save_sms_response: 6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"main.main.func2\n\tB:/0s5/main.go:255\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"debug","ts":1764239581.605972,"caller":"0s5/main.go:266","msg":"Батч обработан","batchNum":1}
+{"level":"debug","ts":1764239581.6060288,"caller":"0s5/main.go:435","msg":"Все батчи обработаны"}
+{"level":"debug","ts":1764239582.1061418,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239592.182805,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239592.6833856,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239602.7419288,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239603.2421427,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239613.4326496,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239613.9339404,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239623.9926856,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239624.4938276,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239634.5528336,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239635.0539875,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239645.1104202,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239645.6114206,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239648.139766,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":96.0008058,"rebindInterval":120,"remaining":23.9991942}
+{"level":"debug","ts":1764239653.139793,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":101.0008328,"rebindInterval":120,"remaining":18.9991672}
+{"level":"debug","ts":1764239655.6721828,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239656.1730952,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239658.1404839,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":106.0015237,"rebindInterval":120,"remaining":13.9984763}
+{"level":"debug","ts":1764239663.6398995,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":111.5009392,"rebindInterval":120,"remaining":8.4990608}
+{"level":"debug","ts":1764239666.2310734,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239666.7315795,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239668.6402333,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":116.501273,"rebindInterval":120,"remaining":3.498727}
+{"level":"info","ts":1764239672.1403775,"caller":"sms/smpp_adapter.go:324","msg":"Rebind(): выполняется переподключение","timeSinceLastAnswer":120.0014174,"rebindInterval":120}
+{"level":"debug","ts":1764239672.1403775,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239672.1403775,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239672.1424851,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239672.1424851,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"not connected"}
+{"level":"warn","ts":1764239672.1424851,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"not connected"}
+{"level":"debug","ts":1764239672.1424851,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"debug","ts":1764239672.6427155,"caller":"sms/smpp_adapter.go:113","msg":"Bind(): старый канал статуса закрыт"}
+{"level":"debug","ts":1764239672.9429276,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239672.9429276,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239672.9429276,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239672.9751542,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"debug","ts":1764239672.9751542,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239672.9751542,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"info","ts":1764239672.9751542,"caller":"sms/smpp_adapter.go:342","msg":"Rebind(): успешно переподключен"}
+{"level":"debug","ts":1764239676.7876828,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239677.2877355,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239677.6405745,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":96.0812869,"rebindInterval":120,"remaining":23.9187131}
+{"level":"debug","ts":1764239683.1404643,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":101.5811769,"rebindInterval":120,"remaining":18.4188231}
+{"level":"debug","ts":1764239687.3498206,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239687.850847,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239688.6395955,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":107.080308,"rebindInterval":120,"remaining":12.919692}
+{"level":"debug","ts":1764239693.640036,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":112.0807486,"rebindInterval":120,"remaining":7.9192514}
+{"level":"debug","ts":1764239697.9078948,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239698.4082577,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239698.640469,"caller":"sms/smpp_adapter.go:311","msg":"Rebind(): проверка","timeSinceLastAnswer":117.0811814,"rebindInterval":120,"remaining":2.9188186}
+{"level":"info","ts":1764239701.6401448,"caller":"sms/smpp_adapter.go:324","msg":"Rebind(): выполняется переподключение","timeSinceLastAnswer":120.0808574,"rebindInterval":120}
+{"level":"debug","ts":1764239701.6401448,"caller":"sms/smpp_adapter.go:83","msg":"Bind(): подключение","host":"smpp.smsc.ru","port":3700,"user":"seleznev.evgeniy"}
+{"level":"debug","ts":1764239701.6401448,"caller":"sms/smpp_adapter.go:92","msg":"Bind(): закрытие существующего клиента, если он подключен"}
+{"level":"debug","ts":1764239701.6431117,"caller":"sms/smpp_adapter.go:104","msg":"Bind(): ожидание закрытия старого соединения"}
+{"level":"debug","ts":1764239701.6431117,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59158->212.24.33.196:3700: use of closed network connection"}
+{"level":"warn","ts":1764239701.6431117,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59158->212.24.33.196:3700: use of closed network connection"}
+{"level":"debug","ts":1764239701.643651,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"debug","ts":1764239702.1435204,"caller":"sms/smpp_adapter.go:113","msg":"Bind(): старый канал статуса закрыт"}
+{"level":"debug","ts":1764239702.4445374,"caller":"sms/smpp_adapter.go:149","msg":"Bind(): создание нового клиента"}
+{"level":"debug","ts":1764239702.4445374,"caller":"sms/smpp_adapter.go:155","msg":"Bind(): вызов client.Bind()"}
+{"level":"debug","ts":1764239702.4445374,"caller":"sms/smpp_adapter.go:162","msg":"Bind(): ожидание первого статуса"}
+{"level":"debug","ts":1764239702.4745536,"caller":"sms/smpp_adapter.go:176","msg":"Bind(): получен первый статус","status":"Connected"}
+{"level":"info","ts":1764239702.4745536,"caller":"sms/smpp_adapter.go:235","msg":"Bind(): успешно подключен"}
+{"level":"debug","ts":1764239702.4745536,"caller":"sms/smpp_adapter.go:206","msg":"Bind(): горутина отслеживания статуса запущена"}
+{"level":"info","ts":1764239702.4745536,"caller":"sms/smpp_adapter.go:342","msg":"Rebind(): успешно переподключен"}
+{"level":"debug","ts":1764239708.4672942,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239708.96818,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239719.0276444,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239719.5288253,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239723.9345372,"caller":"db/queue_reader.go:464","msg":"Получено сообщение из очереди","messageID":"4492098D5A2E0644E0637303A8C0B7CA","size":510}
+{"level":"info","ts":1764239723.9607031,"caller":"0s5/main.go:402","msg":"Получено сообщений","count":1}
+{"level":"debug","ts":1764239723.9607031,"caller":"0s5/main.go:135","msg":"Обработка батча","batchNum":1,"count":1}
+{"level":"debug","ts":1764239723.9612334,"caller":"0s5/main.go:140","msg":"Обработка сообщения","messageNum":1,"batchNum":1,"messageID":"4492098D5A2E0644E0637303A8C0B7CA","dequeueTime":1764239723.9345372}
+{"level":"debug","ts":1764239723.9612334,"caller":"0s5/main.go:155","msg":"Распарсенные данные","data":"{\n  \"date_active_from\": \"27.11.2025 13:35\",\n  \"dequeue_time\": \"2025-11-27T13:35:23.9345373+03:00\",\n  \"message\": \"msg_kY3u50OU\",\n  \"message_id\": \"4492098D5A2E0644E0637303A8C0B7CA\",\n  \"phone_number\": \"9031000001\",\n  \"sender_name\": \"MRNC_NMIC_R\",\n  \"sending_schedule\": \"0\",\n  \"smpp_id\": \"0\",\n  \"sms_task_id\": \"3360742\"\n}"}
+{"level":"debug","ts":1764239723.961796,"caller":"sms/service.go:471","msg":"[REAL MODE] Отправка SMS через SMPP","taskID":3360742,"phone":"+79031000001","message":"msg_kY3u50OU","sender":"MRNC_NMIC_R","smppHost":"smpp.smsc.ru:3700"}
+{"level":"debug","ts":1764239723.9644554,"caller":"sms/service.go:492","msg":"SMS отправлено","sender":"MRNC_NMIC_R","number":"9031000001","text":"msg_kY3u50OU","messageID":"528593233"}
+{"level":"info","ts":1764239723.9644554,"caller":"sms/service.go:433","msg":"SMS успешно отправлено","taskID":3360742,"messageID":"528593233","phone":"9031000001","sender":"MRNC_NMIC_R"}
+{"level":"info","ts":1764239723.9644554,"caller":"0s5/main.go:228","msg":"Результат отправки SMS","taskID":3360742,"status":2,"messageID":"528593233","errorText":""}
+{"level":"error","ts":1764239723.9890463,"caller":"db/sms_response.go:116","msg":"Ошибка вызова pcsystem.pkg_sms.save_sms_response","taskID":3360742,"messageID":"528593233","statusID":2,"error":"6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"oracle-client/db.(*DBConnection).SaveSmsResponse\n\tB:/0s5/db/sms_response.go:116\nmain.main.func2\n\tB:/0s5/main.go:245\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"error","ts":1764239723.9895513,"caller":"0s5/main.go:255","msg":"Ошибка сохранения результата SMS в БД","taskID":3360742,"error":"ошибка вызова save_sms_response: 6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"main.main.func2\n\tB:/0s5/main.go:255\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"debug","ts":1764239724.0101774,"caller":"0s5/main.go:266","msg":"Батч обработан","batchNum":1}
+{"level":"debug","ts":1764239724.0102422,"caller":"0s5/main.go:435","msg":"Все батчи обработаны"}
+{"level":"debug","ts":1764239724.5111654,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239735.8589125,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239736.3590167,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"debug","ts":1764239746.4207263,"caller":"0s5/main.go:399","msg":"Очередь пуста, ожидание следующей попытки..."}
+{"level":"debug","ts":1764239746.9214861,"caller":"db/queue_reader.go:83","msg":"Попытка извлечения сообщений из очереди","count":100,"queue":"ASKAQ.AQ_ASK","consumer":"SUB_SMS_SENDER","timeout":10}
+{"level":"info","ts":1764239750.0100372,"caller":"0s5/main.go:59","msg":"Получен сигнал, инициируется graceful shutdown","signal":"interrupt","shutdownTimeout":5}
+{"level":"info","ts":1764239750.0100372,"caller":"0s5/main.go:286","msg":"Начало graceful shutdown с таймаутом","timeout":5}
+{"level":"info","ts":1764239750.0100372,"caller":"0s5/main.go:303","msg":"Все операции завершены до истечения таймаута"}
+{"level":"info","ts":1764239750.0105736,"caller":"0s5/main.go:606","msg":"Завершение graceful shutdown..."}
+{"level":"info","ts":1764239750.0105827,"caller":"0s5/main.go:611","msg":"Ожидание завершения активных операций с БД","activeOperations":1}
+{"level":"info","ts":1764239750.0303802,"caller":"db/queue_reader.go:338","msg":"Операция dequeue отменена из-за graceful shutdown","consumer":"SUB_SMS_SENDER","queue":"ASKAQ.AQ_ASK"}
+{"level":"info","ts":1764239750.0303802,"caller":"db/queue_reader.go:132","msg":"Операция чтения из очереди прервана из-за отмены контекста","received":0}
+{"level":"info","ts":1764239750.0303802,"caller":"0s5/main.go:377","msg":"Выборка сообщений отменена из-за graceful shutdown"}
+{"level":"info","ts":1764239750.5106447,"caller":"0s5/main.go:629","msg":"Все активные операции с БД завершены"}
+{"level":"info","ts":1764239750.5106447,"caller":"0s5/main.go:637","msg":"Ожидание завершения всех обработчиков сообщений..."}
+{"level":"info","ts":1764239750.5106447,"caller":"0s5/main.go:647","msg":"Все обработчики сообщений завершены"}
+{"level":"info","ts":1764239750.5106447,"caller":"0s5/main.go:652","msg":"Остановка механизма периодического переподключения SMPP..."}
+{"level":"info","ts":1764239750.5106447,"caller":"sms/service.go:214","msg":"Остановка механизма периодического переподключения SMPP"}
+{"level":"info","ts":1764239750.5106447,"caller":"0s5/main.go:655","msg":"Остановка механизма повторных попыток отправки SMS..."}
+{"level":"info","ts":1764239750.5113907,"caller":"sms/retry.go:186","msg":"Остановка механизма повторных попыток отправки SMS"}
+{"level":"info","ts":1764239750.5113907,"caller":"0s5/main.go:658","msg":"Закрытие SMPP адаптеров..."}
+{"level":"info","ts":1764239750.5139458,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":0}
+{"level":"debug","ts":1764239750.5139458,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59227->212.24.33.196:3700: use of closed network connection"}
+{"level":"warn","ts":1764239750.5139458,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59227->212.24.33.196:3700: use of closed network connection"}
+{"level":"debug","ts":1764239750.5144987,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"debug","ts":1764239750.5162787,"caller":"sms/smpp_adapter.go:210","msg":"Bind(): получен статус","status":"Disconnected","error":"read tcp 192.168.1.104:59220->212.24.33.196:3700: use of closed network connection"}
+{"level":"info","ts":1764239750.5162787,"caller":"sms/service.go:257","msg":"SMPP адаптер закрыт","smppID":1}
+{"level":"warn","ts":1764239750.5162787,"caller":"sms/smpp_adapter.go:218","msg":"SMPP соединение потеряно","error":"read tcp 192.168.1.104:59220->212.24.33.196:3700: use of closed network connection"}
+{"level":"info","ts":1764239750.5162787,"caller":"0s5/main.go:663","msg":"Остановка механизма периодического переподключения к БД..."}
+{"level":"debug","ts":1764239750.5162787,"caller":"sms/smpp_adapter.go:227","msg":"Bind(): канал статуса закрыт, завершение горутины"}
+{"level":"info","ts":1764239750.5168014,"caller":"db/oracle_connector.go:349","msg":"Остановка механизма периодического переподключения к БД"}
+{"level":"info","ts":1764239750.5168014,"caller":"0s5/main.go:666","msg":"Graceful shutdown завершен успешно"}
+{"level":"info","ts":1764239750.5289588,"caller":"db/oracle_connector.go:89","msg":"Database connection closed"}
+{"level":"error","ts":1764239773.7342803,"caller":"db/sms_response.go:116","msg":"Ошибка вызова pcsystem.pkg_sms.save_sms_response","taskID":3360743,"messageID":"528598126","statusID":2,"error":"6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"oracle-client/db.(*DBConnection).SaveSmsResponse\n\tB:/0s5/db/sms_response.go:116\nmain.main.func2\n\tB:/0s5/main.go:245\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
+{"level":"error","ts":1764239773.7353454,"caller":"0s5/main.go:255","msg":"Ошибка сохранения результата SMS в БД","taskID":3360743,"error":"ошибка вызова save_sms_response: 6. get[0]: awaited []byte/string/Number, got *sql.NullString (&sql.NullString{String:\"\", Valid:false})","stacktrace":"main.main.func2\n\tB:/0s5/main.go:255\nmain.runQueueProcessingLoop.func2\n\tB:/0s5/main.go:429"}
