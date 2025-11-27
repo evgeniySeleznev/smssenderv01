@@ -405,15 +405,14 @@ func runQueueProcessingLoop(
 
 		// Отправляем сигнал в горутину о получении ответа (независимо от результата)
 		close(iterationSignalChan)
-		if err != nil {
-			// Проверяем, была ли ошибка из-за отмены контекста (graceful shutdown)
-			if ctx.Err() == context.Canceled {
-				logger.Log.Info("Выборка сообщений отменена из-за graceful shutdown")
-				return
-			}
 
+		// При graceful shutdown: обрабатываем уже вычитанные сообщения перед выходом
+		// DequeueMany возвращает сообщения даже при отмене контекста
+		gracefulShutdownInProgress := ctx.Err() == context.Canceled
+
+		if err != nil && !gracefulShutdownInProgress {
+			// Обычная ошибка (не graceful shutdown) - переподключение
 			logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
-			// При ошибке - переподключение
 			logger.Log.Info("Ошибка соединения, переподключение...")
 			if !sleepWithContext(ctx, 5*time.Second) {
 				return
@@ -425,6 +424,17 @@ func runQueueProcessingLoop(
 				}
 			}
 			continue
+		}
+
+		// При graceful shutdown: если есть вычитанные сообщения, обрабатываем их
+		if gracefulShutdownInProgress {
+			if len(messages) > 0 {
+				logger.Log.Info("Graceful shutdown: обработка вычитанных сообщений перед завершением",
+					zap.Int("count", len(messages)))
+			} else {
+				logger.Log.Info("Выборка сообщений отменена из-за graceful shutdown")
+				return
+			}
 		}
 
 		if len(messages) == 0 {
@@ -463,6 +473,12 @@ func runQueueProcessingLoop(
 			// Ждем завершения обработки всех батчей
 			wg.Wait()
 			logger.Log.Debug("Все батчи обработаны")
+
+			// При graceful shutdown: выходим после обработки вычитанных сообщений
+			if gracefulShutdownInProgress {
+				logger.Log.Info("Graceful shutdown: все вычитанные сообщения обработаны, завершение")
+				return
+			}
 		}
 
 		// Обрабатываем exception queue асинхронно, если включено (чтобы не блокировать основной цикл)
