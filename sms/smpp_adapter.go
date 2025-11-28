@@ -491,18 +491,37 @@ func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) 
 
 	// Отправляем запрос QUERY_SM
 	// Сигнатура метода: QuerySM(messageID, sourceAddr string, sourceTON, sourceNPI uint8)
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatus(): отправка запроса QUERY_SM",
+			zap.String("messageID", messageID),
+			zap.String("sourceAddr", sourceAddr),
+			zap.Uint8("sourceTON", sourceTON),
+			zap.Uint8("sourceNPI", sourceNPI))
+	}
 	resp, err := a.client.QuerySM(messageID, sourceAddr, sourceTON, sourceNPI)
 	if err != nil {
 		// Проверяем, является ли ошибка ошибкой соединения
 		if isConnectionError(err) {
 			if logger.Log != nil {
-				logger.Log.Warn("QuerySMSStatus(): обнаружена ошибка соединения", zap.Error(err))
+				logger.Log.Warn("QuerySMSStatus(): обнаружена ошибка соединения",
+					zap.String("messageID", messageID),
+					zap.String("sourceAddr", sourceAddr),
+					zap.Error(err))
 			}
 			// Помечаем соединение как разорванное
 			a.mu.Lock()
 			a.isConnected = false
 			a.mu.Unlock()
 			return 0, fmt.Errorf("ошибка соединения: %w", err)
+		}
+		// Логируем детали ошибки от провайдера
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatus(): провайдер вернул ошибку на QUERY_SM",
+				zap.String("messageID", messageID),
+				zap.String("sourceAddr", sourceAddr),
+				zap.Uint8("sourceTON", sourceTON),
+				zap.Uint8("sourceNPI", sourceNPI),
+				zap.Error(err))
 		}
 		return 0, fmt.Errorf("ошибка запроса статуса: %w", err)
 	}
