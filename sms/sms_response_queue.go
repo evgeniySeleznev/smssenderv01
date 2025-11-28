@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	defaultSmsResponseQueueSize  = 1000
+	defaultSmsResponseQueueSize  = 2000
 	defaultSmsResponseBatchSize  = 50
-	defaultSmsResponseBatchTimeout = 2 * time.Second
+	defaultSmsResponseBatchTimeout = 1 * time.Second
 )
 
 // SmsResponseQueue представляет очередь для batch-сохранения результатов отправки SMS

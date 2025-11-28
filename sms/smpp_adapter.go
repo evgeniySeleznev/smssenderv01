@@ -63,9 +63,9 @@ type BatchDeliveryReceiptCallback func(receipts []*DeliveryReceipt) int
 
 // Константы для буферной очереди delivery receipts
 const (
-	deliveryReceiptQueueSize    = 1000            // Размер буфера очереди
+	deliveryReceiptQueueSize    = 2000            // Размер буфера очереди
 	deliveryReceiptBatchSize    = 50              // Размер batch для сохранения
-	deliveryReceiptBatchTimeout = 2 * time.Second // Таймаут для сбора batch
+	deliveryReceiptBatchTimeout = 1 * time.Second // Таймаут для сбора batch
 )
 
 // SMPPAdapter представляет адаптер для работы с SMPP протоколом
@@ -82,6 +82,7 @@ type SMPPAdapter struct {
 	deliveryReceiptCallback      DeliveryReceiptCallback      // Callback для обработки одиночного receipt (deprecated)
 	batchDeliveryReceiptCallback BatchDeliveryReceiptCallback // Callback для batch-обработки receipts
 	deliveryReceiptWg            sync.WaitGroup               // WaitGroup для ожидания завершения обработки receipts
+	deliveryReceiptWgMu          sync.Mutex                   // Мьютекс для защиты WaitGroup от повторного использования
 	deliveryReceiptQueue         chan *DeliveryReceipt        // Буферная очередь для delivery receipts
 	receiptWorkerStop            chan struct{}                // Канал для остановки воркера очереди
 	receiptWorkerRunning         bool                         // Флаг работы воркера
@@ -929,6 +930,10 @@ func (a *SMPPAdapter) Close() error {
 // Возвращает true, если все обработки завершились до истечения таймаута
 // Возвращает false, если таймаут истек
 func (a *SMPPAdapter) WaitForDeliveryReceipts(timeout time.Duration) bool {
+	// Защищаем WaitGroup от повторного использования
+	a.deliveryReceiptWgMu.Lock()
+	defer a.deliveryReceiptWgMu.Unlock()
+
 	done := make(chan struct{})
 	go func() {
 		a.deliveryReceiptWg.Wait()
