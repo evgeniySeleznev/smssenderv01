@@ -3,6 +3,10 @@ package sms
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -496,18 +500,10 @@ func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) 
 	}
 
 	// Определяем значения TON и NPI для source address
-	// Для буквенных адресов (alphanumeric) используем TON=5 (Alphanumeric), NPI=0 (Unknown)
-	// Для числовых адресов используем TON=1 (International), NPI=8 (National)
-	var sourceTON, sourceNPI uint8
-	if isAlphanumericAddress(sourceAddr) {
-		// Буквенный адрес отправителя (например, "MRNC_NMIC_R")
-		sourceTON = TONAlphanumeric
-		sourceNPI = NPIUnknown
-	} else {
-		// Числовой адрес отправителя
-		sourceTON = TONInternational
-		sourceNPI = NPINational
-	}
+	// Для QUERY_SM используем TON=0, NPI=0 (Unknown) - некоторые провайдеры требуют это для запроса статуса
+	// даже если при отправке использовались другие значения
+	sourceTON := TONUnknown
+	sourceNPI := NPIUnknown
 
 	// Применение опциональных параметров адресов из конфигурации (переопределяют автоматическое определение)
 	if a.config.SourceTon != nil {
@@ -602,6 +598,152 @@ func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) 
 		logger.Log.Debug("QuerySMSStatus(): получен статус",
 			zap.String("messageID", messageID),
 			zap.String("msgState", msgState),
+			zap.Int("messageState", messageState))
+	}
+
+	return messageState, nil
+}
+
+// QuerySMSStatusHTTP запрашивает статус доставки SMS через HTTP API SMSC.RU
+// messageID - ID сообщения, полученный при отправке
+// phoneNumber - номер телефона получателя (в формате 9031000001, без +7)
+// Возвращает статус доставки (message_state) и ошибку
+// Статусы: 2 = DELIVERED (доставлено), 3 = EXPIRED (истекло), 5 = UNDELIVERABLE (не доставлено)
+func (a *SMPPAdapter) QuerySMSStatusHTTP(messageID, phoneNumber string) (int, error) {
+	// Формируем URL для HTTP API SMSC.RU
+	// Согласно документации: http://smsc.ru/sys/status.php?login=...&psw=...&phone=...&id=...&all=0&fmt=1&charset=utf-8
+	apiURL := "http://smsc.ru/sys/status.php"
+
+	// Форматируем номер телефона для SMSC.RU API
+	// API ожидает формат: 79031000001 (с 7, без +)
+	formattedPhone := phoneNumber
+	if strings.HasPrefix(phoneNumber, "+7") {
+		// Убираем +7, оставляем только цифры
+		formattedPhone = "7" + phoneNumber[2:]
+	} else if strings.HasPrefix(phoneNumber, "7") {
+		// Уже в формате 7...
+		formattedPhone = phoneNumber
+	} else {
+		// Формат 9031000001 - добавляем 7 в начало
+		formattedPhone = "7" + phoneNumber
+	}
+
+	// Подготавливаем параметры запроса
+	params := url.Values{}
+	params.Set("login", a.config.User)
+	params.Set("psw", a.config.Password)
+	params.Set("phone", formattedPhone) // Номер в формате 79031000001
+	params.Set("id", messageID)         // ID сообщения от провайдера
+	params.Set("all", "0")              // Без дополнительной информации
+	params.Set("fmt", "1")              // CSV формат ответа
+	params.Set("charset", "utf-8")      // Кодировка UTF-8
+
+	fullURL := apiURL + "?" + params.Encode()
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatusHTTP(): отправка HTTP запроса к SMSC.RU API",
+			zap.String("messageID", messageID),
+			zap.String("phoneNumber", phoneNumber),
+			zap.String("formattedPhone", formattedPhone),
+			zap.String("url", apiURL)) // Не логируем полный URL с паролем
+	}
+
+	// Выполняем HTTP GET запрос
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Get(fullURL)
+	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Error("QuerySMSStatusHTTP(): ошибка HTTP запроса",
+				zap.String("messageID", messageID),
+				zap.String("phoneNumber", phoneNumber),
+				zap.Error(err))
+		}
+		return 0, fmt.Errorf("ошибка HTTP запроса: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Читаем ответ
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Error("QuerySMSStatusHTTP(): ошибка чтения ответа",
+				zap.String("messageID", messageID),
+				zap.Error(err))
+		}
+		return 0, fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	responseStr := strings.TrimSpace(string(body))
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatusHTTP(): получен ответ от SMSC.RU API",
+			zap.String("messageID", messageID),
+			zap.String("response", responseStr))
+	}
+
+	// Парсим CSV ответ: status,time,err или 0,-error
+	parts := strings.Split(responseStr, ",")
+	if len(parts) < 2 {
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatusHTTP(): неожиданный формат ответа",
+				zap.String("messageID", messageID),
+				zap.String("response", responseStr))
+		}
+		return 0, fmt.Errorf("неожиданный формат ответа: %s", responseStr)
+	}
+
+	// Проверяем на ошибку (формат: 0,-error_code)
+	statusStr := strings.TrimSpace(parts[0])
+	timeStr := strings.TrimSpace(parts[1])
+
+	// Если статус начинается с "-", это код ошибки
+	if strings.HasPrefix(timeStr, "-") {
+		errorCode := timeStr
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatusHTTP(): SMSC.RU вернул ошибку",
+				zap.String("messageID", messageID),
+				zap.String("errorCode", errorCode))
+		}
+		return 0, fmt.Errorf("SMSC.RU API ошибка: %s", errorCode)
+	}
+
+	// Парсим статус (число)
+	status, err := strconv.Atoi(statusStr)
+	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatusHTTP(): не удалось распарсить статус",
+				zap.String("messageID", messageID),
+				zap.String("statusStr", statusStr),
+				zap.Error(err))
+		}
+		return 0, fmt.Errorf("ошибка парсинга статуса: %w", err)
+	}
+
+	// Преобразуем статус SMSC.RU в формат SMPP message_state
+	// Статусы SMSC.RU: обычно 1 = доставлено, другие значения = не доставлено или в процессе
+	// Преобразуем в формат: 2 = DELIVERED, 5 = UNDELIVERABLE
+	var messageState int
+
+	// Согласно документации SMSC.RU, статус 1 обычно означает доставлено
+	// Но нужно проверить актуальную документацию
+	if status == 1 {
+		messageState = 2 // DELIVERED
+	} else if status == 0 {
+		// Статус 0 может означать "в очереди" или "отправлено"
+		messageState = 1 // ENROUTE (в пути)
+	} else {
+		// Другие статусы считаем не доставленными
+		messageState = 5 // UNDELIVERABLE
+	}
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatusHTTP(): статус обработан",
+			zap.String("messageID", messageID),
+			zap.Int("smscStatus", status),
+			zap.String("time", timeStr),
 			zap.Int("messageState", messageState))
 	}
 

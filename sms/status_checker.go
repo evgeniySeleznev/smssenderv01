@@ -26,7 +26,8 @@ func NewStatusChecker(service *Service) *StatusChecker {
 // messageID - ID сообщения от SMPP провайдера
 // senderName - имя отправителя (source address)
 // smppID - ID SMPP провайдера
-func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName string, smppID int) {
+// phoneNumber - номер телефона получателя (для HTTP API проверки статуса)
+func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName string, smppID int, phoneNumber string) {
 	// Запускаем горутину только если это не режим Silent
 	if sc.service.cfg.Mode.Silent {
 		if logger.Log != nil {
@@ -42,7 +43,7 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 		// Используем простой time.Sleep - горутина может проснуться после закрытия соединений
 		time.Sleep(10 * time.Second)
 
-		// Получаем адаптер для запроса статуса
+		// Получаем адаптер для доступа к конфигурации (credentials для HTTP API)
 		sc.service.mu.RLock()
 		adapter, ok := sc.service.adapters[smppID]
 		sc.service.mu.RUnlock()
@@ -57,19 +58,9 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 			return
 		}
 
-		// Проверяем, подключен ли адаптер (может быть закрыт при shutdown)
-		if !adapter.IsConnected() {
-			if logger.Log != nil {
-				logger.Log.Warn("SMPP адаптер не подключен при проверке статуса (возможно, соединение закрыто при shutdown)",
-					zap.Int64("taskID", taskID),
-					zap.String("messageID", messageID),
-					zap.Int("smppID", smppID))
-			}
-			return
-		}
-
-		// Запрашиваем статус доставки
-		messageState, err := adapter.QuerySMSStatus(messageID, senderName)
+		// Запрашиваем статус доставки через HTTP API SMSC.RU
+		// HTTP API не требует SMPP соединения, поэтому проверка IsConnected() не нужна
+		messageState, err := adapter.QuerySMSStatusHTTP(messageID, phoneNumber)
 		if err != nil {
 			// Обрабатываем ошибки соединения (может быть закрыто при shutdown)
 			if logger.Log != nil {

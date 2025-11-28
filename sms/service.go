@@ -292,9 +292,9 @@ func (s *Service) StopPeriodicRebind() {
 }
 
 // startStatusCheck запускает горутину для проверки статуса доставки SMS через 5 минут
-func (s *Service) startStatusCheck(taskID int64, messageID, senderName string, smppID int) {
+func (s *Service) startStatusCheck(taskID int64, messageID, senderName string, smppID int, phoneNumber string) {
 	if s.statusChecker != nil {
-		s.statusChecker.StartStatusCheck(taskID, messageID, senderName, smppID)
+		s.statusChecker.StartStatusCheck(taskID, messageID, senderName, smppID, phoneNumber)
 	}
 }
 
@@ -503,7 +503,8 @@ func (s *Service) ProcessSMS(ctx context.Context, msg SMSMessage) (*SMSResponse,
 	}
 
 	// Запускаем горутину для проверки статуса доставки через 5 минут
-	s.startStatusCheck(msg.TaskID, messageID, msg.SenderName, msg.SMPPID)
+	// Передаем номер телефона для HTTP API проверки статуса
+	s.startStatusCheck(msg.TaskID, messageID, msg.SenderName, msg.SMPPID, phoneNumber)
 
 	return &SMSResponse{
 		TaskID:    msg.TaskID,
