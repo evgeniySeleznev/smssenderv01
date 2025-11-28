@@ -19,6 +19,11 @@ import (
 )
 
 func main() {
+
+	// Дает время на завершение отправки SMS, обработку ответов о доставке от SMPP и записи в БД
+	// Единая константа для всего приложения
+	const shutdownTimeout = 10 * time.Second
+
 	// Создаем подключение к БД для загрузки конфигурации
 	dbConn, err := db.NewDBConnection()
 	if err != nil {
@@ -38,10 +43,6 @@ func main() {
 	// Создаем контекст для graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Дает время на завершение отправки SMS, обработки delivery receipts и записи в БД
-	// Единая константа для всего приложения
-	const shutdownTimeout = 5 * time.Second
 
 	// Настраиваем обработку сигналов для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
