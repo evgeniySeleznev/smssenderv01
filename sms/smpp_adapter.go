@@ -929,44 +929,45 @@ func (a *SMPPAdapter) Close() error {
 
 // WaitForDeliveryReceipts ожидает завершения всех текущих обработок delivery receipts
 // Возвращает true, если все обработки завершились до истечения таймаута
-// Возвращает false, если таймаут истек
+// Возвращает false, если таймаут истек или Wait() уже запущен
 func (a *SMPPAdapter) WaitForDeliveryReceipts(timeout time.Duration) bool {
 	// Защищаем WaitGroup от повторного использования
 	a.deliveryReceiptWgMu.Lock()
-	defer a.deliveryReceiptWgMu.Unlock()
 
-	// Используем канал для сигнализации завершения и отмены
+	// Проверяем, не запущен ли уже Wait()
+	if a.deliveryReceiptWaitRunning {
+		a.deliveryReceiptWgMu.Unlock()
+		if logger.Log != nil {
+			logger.Log.Warn("WaitForDeliveryReceipts уже запущен, пропускаем повторный вызов")
+		}
+		return false
+	}
+
+	// Помечаем, что Wait() запущен
+	a.deliveryReceiptWaitRunning = true
+	a.deliveryReceiptWgMu.Unlock()
+
 	done := make(chan struct{})
-	cancel := make(chan struct{})
-	
 	go func() {
 		// Вызываем Wait() в горутине
 		a.deliveryReceiptWg.Wait()
-		
-		// Проверяем, не была ли операция отменена
-		select {
-		case <-cancel:
-			// Операция была отменена, просто выходим
-			return
-		default:
-			// Операция завершена успешно
-			select {
-			case done <- struct{}{}:
-			default:
-				// Канал уже закрыт или заблокирован
-			}
-		}
+		close(done)
 	}()
 
 	select {
 	case <-done:
-		close(cancel)
+		// Wait() завершился успешно
+		a.deliveryReceiptWgMu.Lock()
+		a.deliveryReceiptWaitRunning = false
+		a.deliveryReceiptWgMu.Unlock()
 		return true
 	case <-time.After(timeout):
-		// Таймаут - отменяем горутину
-		close(cancel)
-		// Даем горутине время завершиться
-		time.Sleep(10 * time.Millisecond)
+		// Таймаут - Wait() все еще работает, но мы не можем его отменить
+		// Просто помечаем, что больше не ждем, но горутина продолжит работать
+		// Это безопасно, так как Wait() может быть вызван только один раз
+		a.deliveryReceiptWgMu.Lock()
+		a.deliveryReceiptWaitRunning = false
+		a.deliveryReceiptWgMu.Unlock()
 		return false
 	}
 }
