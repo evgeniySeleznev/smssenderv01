@@ -16,10 +16,13 @@ import (
 
 // Константы для TON и NPI согласно стандарту SMPP
 const (
+	TONUnknown       uint8 = 0 // Unknown
 	TONInternational uint8 = 1 // International number
 	TONNational      uint8 = 2 // National number
+	TONAlphanumeric  uint8 = 5 // Alphanumeric (для буквенных адресов отправителя)
 	NPINational      uint8 = 8 // National numbering plan
 	NPIIsdn          uint8 = 1 // ISDN numbering plan
+	NPIUnknown       uint8 = 0 // Unknown numbering plan
 	PriorityHighest  uint8 = 3 // Highest priority
 )
 
@@ -354,13 +357,23 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	// Форматирование номера: добавляем префикс "+7"
 	destinationAddress := "+7" + number
 
-	// Определяем значения TON и NPI
-	sourceTON := TONInternational
-	sourceNPI := NPINational
+	// Определяем значения TON и NPI для source address
+	// Для буквенных адресов (alphanumeric) используем TON=5 (Alphanumeric), NPI=0 (Unknown)
+	// Для числовых адресов используем TON=1 (International), NPI=8 (National)
+	var sourceTON, sourceNPI uint8
+	if isAlphanumericAddress(senderName) {
+		// Буквенный адрес отправителя (например, "MRNC_NMIC_R")
+		sourceTON = TONAlphanumeric
+		sourceNPI = NPIUnknown
+	} else {
+		// Числовой адрес отправителя
+		sourceTON = TONInternational
+		sourceNPI = NPINational
+	}
 	destTON := TONInternational
 	destNPI := NPINational
 
-	// Применение опциональных параметров адресов из конфигурации
+	// Применение опциональных параметров адресов из конфигурации (переопределяют автоматическое определение)
 	if a.config.SourceTon != nil {
 		sourceTON = uint8(*a.config.SourceTon)
 	}
@@ -478,10 +491,20 @@ func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) 
 	}
 
 	// Определяем значения TON и NPI для source address
-	sourceTON := TONInternational
-	sourceNPI := NPINational
+	// Для буквенных адресов (alphanumeric) используем TON=5 (Alphanumeric), NPI=0 (Unknown)
+	// Для числовых адресов используем TON=1 (International), NPI=8 (National)
+	var sourceTON, sourceNPI uint8
+	if isAlphanumericAddress(sourceAddr) {
+		// Буквенный адрес отправителя (например, "MRNC_NMIC_R")
+		sourceTON = TONAlphanumeric
+		sourceNPI = NPIUnknown
+	} else {
+		// Числовой адрес отправителя
+		sourceTON = TONInternational
+		sourceNPI = NPINational
+	}
 
-	// Применение опциональных параметров адресов из конфигурации
+	// Применение опциональных параметров адресов из конфигурации (переопределяют автоматическое определение)
 	if a.config.SourceTon != nil {
 		sourceTON = uint8(*a.config.SourceTon)
 	}
@@ -578,6 +601,29 @@ func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) 
 	}
 
 	return messageState, nil
+}
+
+// isAlphanumericAddress проверяет, является ли адрес буквенным (alphanumeric)
+// Буквенные адреса содержат буквы, цифры и специальные символы, но не являются чисто числовыми
+func isAlphanumericAddress(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	// Проверяем, содержит ли адрес хотя бы одну букву или специальный символ
+	hasLetter := false
+	hasOnlyDigits := true
+	for _, r := range addr {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			hasLetter = true
+			hasOnlyDigits = false
+			break
+		}
+		if r < '0' || r > '9' {
+			hasOnlyDigits = false
+		}
+	}
+	// Если есть буквы или есть нецифровые символы - это буквенный адрес
+	return hasLetter || !hasOnlyDigits
 }
 
 // isConnectionError проверяет, является ли ошибка ошибкой соединения
