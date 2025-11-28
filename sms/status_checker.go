@@ -40,7 +40,7 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 	go func() {
 		// Ждем 5 минут перед запросом статуса
 		// Используем простой time.Sleep - горутина может проснуться после закрытия соединений
-		time.Sleep(1 * time.Minute)
+		time.Sleep(10 * time.Second)
 
 		// Получаем адаптер для запроса статуса
 		sc.service.mu.RLock()

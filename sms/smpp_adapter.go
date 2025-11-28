@@ -363,7 +363,7 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	var sourceTON, sourceNPI uint8
 	if isAlphanumericAddress(senderName) {
 		// Буквенный адрес отправителя (например, "MRNC_NMIC_R")
-		sourceTON = TONAlphanumeric
+		sourceTON = TONUnknown
 		sourceNPI = NPIUnknown
 	} else {
 		// Числовой адрес отправителя
