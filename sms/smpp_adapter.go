@@ -362,9 +362,6 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	destinationAddress := "+7" + number
 
 	// Определяем значения TON и NPI для source address
-	// Для буквенных адресов (alphanumeric) используем TON=5 (Alphanumeric), NPI=0 (Unknown)
-	// Для числовых адресов используем TON=1 (International), NPI=8 (National)
-
 	sourceTON := TONUnknown
 	sourceNPI := NPIUnknown
 
@@ -479,129 +476,6 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 
 	a.lastAnswerTime = time.Now()
 	return smsID, nil
-}
-
-// QuerySMSStatus запрашивает статус доставки SMS через команду QUERY_SM
-// messageID - ID сообщения, полученный при отправке
-// sourceAddr - адрес отправителя (source address)
-// sourceTON - тип номера отправителя (TON)
-// sourceNPI - план нумерации отправителя (NPI)
-// Возвращает статус доставки (message_state) и ошибку
-// Статусы: 2 = DELIVERED (доставлено), 3 = EXPIRED (истекло), 5 = UNDELIVERABLE (не доставлено)
-func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) {
-	// Проверяем соединение
-	if !a.IsConnected() {
-		if logger.Log != nil {
-			logger.Log.Debug("QuerySMSStatus(): соединение не установлено, выполняется подключение")
-		}
-		if err := a.Bind(); err != nil {
-			return 0, fmt.Errorf("ошибка подключения: %w", err)
-		}
-	}
-
-	// Определяем значения TON и NPI для source address
-	// Для QUERY_SM используем TON=0, NPI=0 (Unknown) - некоторые провайдеры требуют это для запроса статуса
-	// даже если при отправке использовались другие значения
-	sourceTON := TONUnknown
-	sourceNPI := NPIUnknown
-
-	// Применение опциональных параметров адресов из конфигурации (переопределяют автоматическое определение)
-	if a.config.SourceTon != nil {
-		sourceTON = uint8(*a.config.SourceTon)
-	}
-	if a.config.SourceNpi != nil {
-		sourceNPI = uint8(*a.config.SourceNpi)
-	}
-
-	// Отправляем запрос QUERY_SM
-	// Сигнатура метода: QuerySM(messageID, sourceAddr string, sourceTON, sourceNPI uint8)
-	if logger.Log != nil {
-		logger.Log.Debug("QuerySMSStatus(): отправка запроса QUERY_SM",
-			zap.String("messageID", messageID),
-			zap.String("sourceAddr", sourceAddr),
-			zap.Uint8("sourceTON", sourceTON),
-			zap.Uint8("sourceNPI", sourceNPI))
-	}
-	resp, err := a.client.QuerySM(messageID, sourceAddr, sourceTON, sourceNPI)
-	if err != nil {
-		// Проверяем, является ли ошибка ошибкой соединения
-		if isConnectionError(err) {
-			if logger.Log != nil {
-				logger.Log.Warn("QuerySMSStatus(): обнаружена ошибка соединения",
-					zap.String("messageID", messageID),
-					zap.String("sourceAddr", sourceAddr),
-					zap.Error(err))
-			}
-			// Помечаем соединение как разорванное
-			a.mu.Lock()
-			a.isConnected = false
-			a.mu.Unlock()
-			return 0, fmt.Errorf("ошибка соединения: %w", err)
-		}
-		// Логируем детали ошибки от провайдера
-		if logger.Log != nil {
-			logger.Log.Warn("QuerySMSStatus(): провайдер вернул ошибку на QUERY_SM",
-				zap.String("messageID", messageID),
-				zap.String("sourceAddr", sourceAddr),
-				zap.Uint8("sourceTON", sourceTON),
-				zap.Uint8("sourceNPI", sourceNPI),
-				zap.Error(err))
-		}
-		return 0, fmt.Errorf("ошибка запроса статуса: %w", err)
-	}
-
-	// Обновляем время последнего ответа
-	a.mu.Lock()
-	a.lastAnswerTime = time.Now()
-	a.mu.Unlock()
-
-	// Извлекаем message_state из ответа
-	// QueryResp имеет поле MsgState типа string
-	if resp == nil {
-		return 0, fmt.Errorf("пустой ответ от QuerySM")
-	}
-
-	// Преобразуем строковый статус в числовой
-	// Статусы SMPP: "DELIVRD" (доставлено), "UNDELIV" (не доставлено), "EXPIRED" (истекло)
-	// Возвращаем числовые значения: 2 = DELIVERED, 3 = EXPIRED, 5 = UNDELIVERABLE
-	msgState := strings.ToUpper(strings.TrimSpace(resp.MsgState))
-	var messageState int
-
-	switch msgState {
-	case "DELIVRD", "DELIVERED":
-		messageState = 2 // DELIVERED
-	case "EXPIRED":
-		messageState = 3 // EXPIRED
-	case "UNDELIV", "UNDELIVERABLE":
-		messageState = 5 // UNDELIVERABLE
-	case "ENROUTE":
-		messageState = 1 // ENROUTE
-	case "DELETED":
-		messageState = 4 // DELETED
-	case "ACCEPTED", "ACCEPTD":
-		messageState = 6 // ACCEPTED
-	case "UNKNOWN":
-		messageState = 7 // UNKNOWN
-	case "REJECTED", "REJECTD":
-		messageState = 8 // REJECTED
-	default:
-		// Неизвестный статус - считаем не доставленным
-		if logger.Log != nil {
-			logger.Log.Warn("QuerySMSStatus(): неизвестный статус",
-				zap.String("messageID", messageID),
-				zap.String("msgState", msgState))
-		}
-		messageState = 5 // UNDELIVERABLE по умолчанию
-	}
-
-	if logger.Log != nil {
-		logger.Log.Debug("QuerySMSStatus(): получен статус",
-			zap.String("messageID", messageID),
-			zap.String("msgState", msgState),
-			zap.Int("messageState", messageState))
-	}
-
-	return messageState, nil
 }
 
 // QuerySMSStatusHTTP запрашивает статус доставки SMS через HTTP API SMSC.RU
@@ -727,12 +601,12 @@ func (a *SMPPAdapter) QuerySMSStatusHTTP(messageID, phoneNumber string) (int, er
 	// Преобразуем в формат: 2 = DELIVERED, 5 = UNDELIVERABLE
 	var messageState int
 
-	// Согласно документации SMSC.RU, статус 1 обычно означает доставлено
-	// Но нужно проверить актуальную документацию
+	// Согласно документации SMSC.RU, статус 1 обычно означает доставлено, остальные — ошибка
+	// Остальная дока: smsc.ru/api/http/status_messages/statuses/
 	if status == 1 {
 		messageState = 2 // DELIVERED
 	} else if status == 0 {
-		// Статус 0 может означать "в очереди" или "отправлено"
+		// Сообщение было передано на SMS-центр оператора для доставки, но у нас истекли 5 минут ожидания ответа
 		messageState = 1 // ENROUTE (в пути)
 	} else {
 		// Другие статусы считаем не доставленными
@@ -748,29 +622,6 @@ func (a *SMPPAdapter) QuerySMSStatusHTTP(messageID, phoneNumber string) (int, er
 	}
 
 	return messageState, nil
-}
-
-// isAlphanumericAddress проверяет, является ли адрес буквенным (alphanumeric)
-// Буквенные адреса содержат буквы, цифры и специальные символы, но не являются чисто числовыми
-func isAlphanumericAddress(addr string) bool {
-	if addr == "" {
-		return false
-	}
-	// Проверяем, содержит ли адрес хотя бы одну букву или специальный символ
-	hasLetter := false
-	hasOnlyDigits := true
-	for _, r := range addr {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-			hasLetter = true
-			hasOnlyDigits = false
-			break
-		}
-		if r < '0' || r > '9' {
-			hasOnlyDigits = false
-		}
-	}
-	// Если есть буквы или есть нецифровые символы - это буквенный адрес
-	return hasLetter || !hasOnlyDigits
 }
 
 // isConnectionError проверяет, является ли ошибка ошибкой соединения
