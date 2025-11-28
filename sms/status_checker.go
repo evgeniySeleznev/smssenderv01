@@ -1,6 +1,7 @@
 package sms
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -14,12 +15,18 @@ import (
 type StatusChecker struct {
 	service *Service
 	checkWg sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.RWMutex
 }
 
 // NewStatusChecker создает новый StatusChecker
 func NewStatusChecker(service *Service) *StatusChecker {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &StatusChecker{
 		service: service,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
@@ -43,10 +50,25 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 	go func() {
 		defer sc.checkWg.Done()
 
-		// Ждем 5 минут перед запросом статуса
-		// Используем простой time.Sleep - если контекст отменится во время ожидания,
-		// горутина просто завершится и мы потеряем обновление статуса для этого SMS (это приемлемо)
-		time.Sleep(5 * time.Minute)
+		// Получаем контекст для проверки отмены
+		sc.mu.RLock()
+		ctx := sc.ctx
+		sc.mu.RUnlock()
+
+		// Ждем 5 минут перед запросом статуса с возможностью прерывания
+		// Если контекст отменится во время ожидания, горутина завершится немедленно
+		select {
+		case <-ctx.Done():
+			// Контекст отменен - завершаем горутину без проверки статуса
+			if logger.Log != nil {
+				logger.Log.Debug("Проверка статуса отменена (shutdown)",
+					zap.Int64("taskID", taskID),
+					zap.String("messageID", messageID))
+			}
+			return
+		case <-time.After(5 * time.Minute):
+			// Прошло 5 минут - продолжаем проверку статуса
+		}
 
 		// Получаем адаптер для запроса статуса
 		sc.service.mu.RLock()
@@ -123,6 +145,15 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 			}
 		}
 	}()
+}
+
+// Stop отменяет контекст, что приводит к немедленному завершению всех горутин проверки статуса
+func (sc *StatusChecker) Stop() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.cancel != nil {
+		sc.cancel()
+	}
 }
 
 // Wait ожидает завершения всех горутин проверки статуса
