@@ -11,10 +11,11 @@
 # Output of the go coverage tool
 *.out
 
-# Dependency directories
-vendor/
-md/
+# logs
 logs/
+
+# Dependency directories
+md/
 
 # Go workspace file
 go.work

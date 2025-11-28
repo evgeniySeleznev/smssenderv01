@@ -3,15 +3,16 @@ package sms
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fiorix/go-smpp/smpp"
-	"github.com/fiorix/go-smpp/smpp/pdu"
-	"github.com/fiorix/go-smpp/smpp/pdu/pdufield"
 	"github.com/fiorix/go-smpp/smpp/pdu/pdutext"
-	"github.com/fiorix/go-smpp/smpp/pdu/pdutlv"
 	"go.uber.org/zap"
 
 	"oracle-client/logger"
@@ -26,51 +27,17 @@ const (
 	PriorityHighest  uint8 = 3 // Highest priority
 )
 
-// SMPP MessageState значения (согласно спецификации SMPP 3.4)
-const (
-	SMPPMessageStateEnroute       = 1 // Сообщение в пути
-	SMPPMessageStateDelivered     = 2 // Доставлено абоненту
-	SMPPMessageStateExpired       = 3 // Истек срок доставки
-	SMPPMessageStateDeleted       = 4 // Удалено
-	SMPPMessageStateUndeliverable = 5 // Не доставлено
-	SMPPMessageStateAccepted      = 6 // Принято
-	SMPPMessageStateUnknown       = 7 // Неизвестно
-	SMPPMessageStateRejected      = 8 // Отклонено
-)
-
-// Статусы для сохранения в БД
-const (
-	StatusSentSuccessfully   = 2 // Успешно отправлено
-	StatusErrorOrUndelivered = 3 // Ошибка отправки или не доставлено
-	StatusDelivered          = 4 // Доставлено абоненту
-)
-
-// DeliveryReceipt представляет delivery receipt от SMPP провайдера
-type DeliveryReceipt struct {
-	ReceiptedMessageID string    // ID сообщения, для которого пришел receipt
-	MessageState       int       // Статус доставки (SMPP MessageState)
-	SequenceNumber     uint32    // Номер последовательности PDU
-	ErrorText          string    // Текст ошибки (если есть)
-	ReceivedAt         time.Time // Время получения receipt
-	StatusID           int       // Статус для сохранения в БД (2, 3 или 4)
-}
-
-// DeliveryReceiptCallback - callback для обработки delivery receipt
-type DeliveryReceiptCallback func(receipt *DeliveryReceipt)
-
 // SMPPAdapter представляет адаптер для работы с SMPP протоколом
 type SMPPAdapter struct {
-	client                  *smpp.Transceiver
-	config                  *SMPPConfig
-	mu                      sync.Mutex
-	lastAnswerTime          time.Time
-	statusChan              <-chan smpp.ConnStatus
-	isConnected             bool                    // Флаг подключения
-	lastBindAttempt         time.Time               // Время последней попытки Bind
-	consecutiveFailures     int                     // Количество последовательных неудачных попыток
-	lastRebindLogTime       time.Time               // Время последнего логирования перед rebind
-	deliveryReceiptCallback DeliveryReceiptCallback // Callback для обработки delivery receipt
-	deliveryReceiptWg       sync.WaitGroup          // WaitGroup для ожидания завершения обработки receipts
+	client              *smpp.Transceiver
+	config              *SMPPConfig
+	mu                  sync.Mutex
+	lastAnswerTime      time.Time
+	statusChan          <-chan smpp.ConnStatus
+	isConnected         bool      // Флаг подключения
+	lastBindAttempt     time.Time // Время последней попытки Bind
+	consecutiveFailures int       // Количество последовательных неудачных попыток
+	lastRebindLogTime   time.Time // Время последнего логирования перед rebind
 }
 
 // NewSMPPAdapter создает новый SMPP адаптер
@@ -108,183 +75,6 @@ func (a *SMPPAdapter) createClient() {
 		User:        a.config.User,
 		Passwd:      a.config.Password,
 		EnquireLink: enquireLink,
-		Handler:     a.handleIncomingPDU, // Обработчик входящих PDU (delivery receipts)
-	}
-}
-
-// SetDeliveryReceiptCallback устанавливает callback для обработки delivery receipts
-func (a *SMPPAdapter) SetDeliveryReceiptCallback(callback DeliveryReceiptCallback) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.deliveryReceiptCallback = callback
-}
-
-// handleIncomingPDU обрабатывает входящие PDU (DELIVER_SM для delivery receipts)
-func (a *SMPPAdapter) handleIncomingPDU(p pdu.Body) {
-	// Проверяем тип PDU - нас интересует только DELIVER_SM
-	switch p.Header().ID {
-	case pdu.DeliverSMID:
-		a.handleDeliverSM(p)
-	default:
-		// Другие типы PDU игнорируем
-		if logger.Log != nil {
-			logger.Log.Debug("Получен PDU",
-				zap.String("type", p.Header().ID.String()))
-		}
-	}
-}
-
-// handleDeliverSM обрабатывает входящий DELIVER_SM (delivery receipt)
-func (a *SMPPAdapter) handleDeliverSM(p pdu.Body) {
-	// Отмечаем начало обработки для graceful shutdown
-	a.deliveryReceiptWg.Add(1)
-	defer a.deliveryReceiptWg.Done()
-
-	// Извлекаем данные из delivery receipt
-	fields := p.Fields()
-
-	// Получаем ReceiptedMessageID из TLV параметров
-	receiptedMessageID := ""
-	if tlvFields := p.TLVFields(); tlvFields != nil {
-		if receiptedMsgID := tlvFields[pdutlv.TagReceiptedMessageID]; receiptedMsgID != nil {
-			receiptedMessageID = strings.TrimRight(string(receiptedMsgID.Bytes()), "\x00")
-		}
-	}
-
-	// Получаем MessageState из TLV параметров
-	// TLV Tag для MessageState = 0x0427 (1063 в десятичной)
-	messageState := 0
-	if tlvFields := p.TLVFields(); tlvFields != nil {
-		if msgState := tlvFields[pdutlv.Tag(0x0427)]; msgState != nil {
-			data := msgState.Bytes()
-			if len(data) > 0 {
-				messageState = int(data[0])
-			}
-		}
-	}
-
-	// Если ReceiptedMessageID пуст, пробуем извлечь из ShortMessage
-	if receiptedMessageID == "" {
-		if shortMsg := fields[pdufield.ShortMessage]; shortMsg != nil {
-			receiptedMessageID = parseMessageIDFromShortMessage(shortMsg.String())
-		}
-	}
-
-	// Если MessageState не установлен, пробуем извлечь из ShortMessage
-	if messageState == 0 {
-		if shortMsg := fields[pdufield.ShortMessage]; shortMsg != nil {
-			messageState = parseMessageStateFromShortMessage(shortMsg.String())
-		}
-	}
-
-	// Определяем статус для сохранения в БД
-	var statusID int
-	var errorText string
-
-	// SMPP MessageState.DELIVERED = 2 -> статус 4 (доставлено)
-	if messageState == SMPPMessageStateDelivered {
-		statusID = StatusDelivered // 4 - "Доставлено абоненту"
-		errorText = ""
-		if logger.Log != nil {
-			logger.Log.Info("Delivery receipt: сообщение доставлено абоненту",
-				zap.String("messageID", receiptedMessageID),
-				zap.Int("smppMessageState", messageState))
-		}
-	} else {
-		statusID = StatusErrorOrUndelivered // 3 - "Не доставлено"
-		errorText = fmt.Sprintf("SMS не доставлено до абонента (MessageState=%d)", messageState)
-		if logger.Log != nil {
-			logger.Log.Warn("Delivery receipt: сообщение не доставлено",
-				zap.String("messageID", receiptedMessageID),
-				zap.Int("smppMessageState", messageState),
-				zap.String("errorText", errorText))
-		}
-	}
-
-	// Формируем структуру delivery receipt
-	receipt := &DeliveryReceipt{
-		ReceiptedMessageID: receiptedMessageID,
-		MessageState:       messageState,
-		SequenceNumber:     p.Header().Seq,
-		ErrorText:          errorText,
-		ReceivedAt:         time.Now(),
-		StatusID:           statusID,
-	}
-
-	// Обновляем время последнего ответа
-	a.mu.Lock()
-	a.lastAnswerTime = time.Now()
-	callback := a.deliveryReceiptCallback
-	a.mu.Unlock()
-
-	// Вызываем callback, если он установлен
-	if callback != nil {
-		callback(receipt)
-	} else {
-		if logger.Log != nil {
-			logger.Log.Warn("Delivery receipt получен, но callback не установлен",
-				zap.String("messageID", receiptedMessageID),
-				zap.Int("statusID", statusID))
-		}
-	}
-}
-
-// parseMessageIDFromShortMessage извлекает MessageID из текста ShortMessage
-// Формат: "id:XXXX sub:001 dlvrd:001 submit date:... done date:... stat:DELIVRD err:000 text:..."
-func parseMessageIDFromShortMessage(shortMessage string) string {
-	// Ищем паттерн "id:" в начале сообщения
-	if strings.HasPrefix(strings.ToLower(shortMessage), "id:") {
-		parts := strings.Fields(shortMessage)
-		if len(parts) > 0 {
-			idPart := parts[0]
-			if strings.HasPrefix(strings.ToLower(idPart), "id:") {
-				return strings.TrimPrefix(strings.TrimPrefix(idPart, "id:"), "ID:")
-			}
-		}
-	}
-	return ""
-}
-
-// parseMessageStateFromShortMessage извлекает MessageState из текста ShortMessage
-// Ищет паттерн "stat:DELIVRD" или "stat:UNDELIV" и т.д.
-func parseMessageStateFromShortMessage(shortMessage string) int {
-	lowerMsg := strings.ToLower(shortMessage)
-
-	// Ищем паттерн stat: в сообщении
-	statIndex := strings.Index(lowerMsg, "stat:")
-	if statIndex == -1 {
-		return 0
-	}
-
-	// Извлекаем значение статуса
-	statPart := shortMessage[statIndex+5:]
-	parts := strings.Fields(statPart)
-	if len(parts) == 0 {
-		return 0
-	}
-
-	statValue := strings.ToUpper(parts[0])
-
-	// Преобразуем текстовый статус в числовой
-	switch statValue {
-	case "DELIVRD", "DELIVERED":
-		return SMPPMessageStateDelivered // 2
-	case "EXPIRED":
-		return SMPPMessageStateExpired // 3
-	case "DELETED":
-		return SMPPMessageStateDeleted // 4
-	case "UNDELIV", "UNDELIVERABLE":
-		return SMPPMessageStateUndeliverable // 5
-	case "ACCEPTD", "ACCEPTED":
-		return SMPPMessageStateAccepted // 6
-	case "UNKNOWN":
-		return SMPPMessageStateUnknown // 7
-	case "REJECTD", "REJECTED":
-		return SMPPMessageStateRejected // 8
-	case "ENROUTE":
-		return SMPPMessageStateEnroute // 1
-	default:
-		return 0
 	}
 }
 
@@ -515,8 +305,8 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 
 	if timeSinceLastAnswer < rebindInterval {
 		// Еще не время для переподключения
-		// Логируем только если прошло более 95% интервала и прошло более 5 секунд с последнего логирования
-		if timeSinceLastAnswer > rebindInterval*95/100 {
+		// Логируем только если прошло более 90% интервала и прошло более 5 секунд с последнего логирования
+		if timeSinceLastAnswer > rebindInterval*90/100 {
 			timeSinceLastLog := time.Since(a.lastRebindLogTime)
 			if timeSinceLastLog >= 5*time.Second {
 				if logger.Log != nil {
@@ -574,7 +364,7 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	destTON := TONInternational
 	destNPI := NPINational
 
-	// Применение опциональных параметров адресов из конфигурации
+	// Применение опциональных параметров адресов из конфигурации (переопределяют автоматическое определение)
 	if a.config.SourceTon != nil {
 		sourceTON = uint8(*a.config.SourceTon)
 	}
@@ -588,22 +378,27 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 		destNPI = uint8(*a.config.DestNpi)
 	}
 
+	// Логируем параметры TON/NPI для отладки
+	if logger.Log != nil {
+		logger.Log.Debug("SendSMS(): параметры адресов",
+			zap.String("senderName", senderName),
+			zap.String("destinationAddress", destinationAddress),
+			zap.Uint8("sourceTON", sourceTON),
+			zap.Uint8("sourceNPI", sourceNPI),
+			zap.Uint8("destTON", destTON),
+			zap.Uint8("destNPI", destNPI))
+	}
+
 	// Создание PDU для отправки с параметрами из руководства
 	req := &smpp.ShortMessage{
 		Src:           senderName,
 		Dst:           destinationAddress,
-		Text:          pdutext.UCS2(text),              // UCS-2 кодировка
-		Register:      pdufield.FailureDeliveryReceipt, // OnSuccessOrFailure (0x02)
+		Text:          pdutext.UCS2(text), // UCS-2 кодировка
 		SourceAddrTON: sourceTON,
 		SourceAddrNPI: sourceNPI,
 		DestAddrTON:   destTON,
 		DestAddrNPI:   destNPI,
 		PriorityFlag:  PriorityHighest, // Highest priority (3)
-	}
-
-	// Добавление TLV для AlertOnMsgDelivery (0x1) - пустое значение означает включение уведомления
-	req.TLVFields = pdutlv.Fields{
-		pdutlv.TagAlertOnMessageDelivery: pdutlv.CString(""),
 	}
 
 	// Отправка с автоматическим переподключением при ошибке
@@ -679,6 +474,152 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	return smsID, nil
 }
 
+// QuerySMSStatusHTTP запрашивает статус доставки SMS через HTTP API SMSC.RU
+// messageID - ID сообщения, полученный при отправке
+// phoneNumber - номер телефона получателя (в формате 9031000001, без +7)
+// Возвращает статус доставки (message_state) и ошибку
+// Статусы: 2 = DELIVERED (доставлено), 3 = EXPIRED (истекло), 5 = UNDELIVERABLE (не доставлено)
+func (a *SMPPAdapter) QuerySMSStatusHTTP(messageID, phoneNumber string) (int, error) {
+	// Формируем URL для HTTP API SMSC.RU
+	// Согласно документации: http://smsc.ru/sys/status.php?login=...&psw=...&phone=...&id=...&all=0&fmt=1&charset=utf-8
+	apiURL := "http://smsc.ru/sys/status.php"
+
+	// Форматируем номер телефона для SMSC.RU API
+	// API ожидает формат: 79031000001 (с 7, без +)
+	formattedPhone := phoneNumber
+	if strings.HasPrefix(phoneNumber, "+7") {
+		// Убираем +7, оставляем только цифры
+		formattedPhone = "7" + phoneNumber[2:]
+	} else if strings.HasPrefix(phoneNumber, "7") {
+		// Уже в формате 7...
+		formattedPhone = phoneNumber
+	} else {
+		// Формат 9031000001 - добавляем 7 в начало
+		formattedPhone = "7" + phoneNumber
+	}
+
+	// Подготавливаем параметры запроса
+	params := url.Values{}
+	params.Set("login", a.config.User)
+	params.Set("psw", a.config.Password)
+	params.Set("phone", formattedPhone) // Номер в формате 79031000001
+	params.Set("id", messageID)         // ID сообщения от провайдера
+	params.Set("all", "0")              // Без дополнительной информации
+	params.Set("fmt", "1")              // CSV формат ответа
+	params.Set("charset", "utf-8")      // Кодировка UTF-8
+
+	fullURL := apiURL + "?" + params.Encode()
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatusHTTP(): отправка HTTP запроса к SMSC.RU API",
+			zap.String("messageID", messageID),
+			zap.String("phoneNumber", phoneNumber),
+			zap.String("formattedPhone", formattedPhone),
+			zap.String("url", apiURL)) // Не логируем полный URL с паролем
+	}
+
+	// Выполняем HTTP GET запрос
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Get(fullURL)
+	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Error("QuerySMSStatusHTTP(): ошибка HTTP запроса",
+				zap.String("messageID", messageID),
+				zap.String("phoneNumber", phoneNumber),
+				zap.Error(err))
+		}
+		return 0, fmt.Errorf("ошибка HTTP запроса: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Читаем ответ
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Error("QuerySMSStatusHTTP(): ошибка чтения ответа",
+				zap.String("messageID", messageID),
+				zap.Error(err))
+		}
+		return 0, fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+
+	responseStr := strings.TrimSpace(string(body))
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatusHTTP(): получен ответ от SMSC.RU API",
+			zap.String("messageID", messageID),
+			zap.String("response", responseStr))
+	}
+
+	// Парсим CSV ответ: status,time,err или 0,-error
+	parts := strings.Split(responseStr, ",")
+	if len(parts) < 2 {
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatusHTTP(): неожиданный формат ответа",
+				zap.String("messageID", messageID),
+				zap.String("response", responseStr))
+		}
+		return 0, fmt.Errorf("неожиданный формат ответа: %s", responseStr)
+	}
+
+	// Проверяем на ошибку (формат: 0,-error_code)
+	statusStr := strings.TrimSpace(parts[0])
+	timeStr := strings.TrimSpace(parts[1])
+
+	// Если статус начинается с "-", это код ошибки
+	if strings.HasPrefix(timeStr, "-") {
+		errorCode := timeStr
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatusHTTP(): SMSC.RU вернул ошибку",
+				zap.String("messageID", messageID),
+				zap.String("errorCode", errorCode))
+		}
+		return 0, fmt.Errorf("SMSC.RU API ошибка: %s", errorCode)
+	}
+
+	// Парсим статус (число)
+	status, err := strconv.Atoi(statusStr)
+	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatusHTTP(): не удалось распарсить статус",
+				zap.String("messageID", messageID),
+				zap.String("statusStr", statusStr),
+				zap.Error(err))
+		}
+		return 0, fmt.Errorf("ошибка парсинга статуса: %w", err)
+	}
+
+	// Преобразуем статус SMSC.RU в формат SMPP message_state
+	// Статусы SMSC.RU: обычно 1 = доставлено, другие значения = не доставлено или в процессе
+	// Преобразуем в формат: 2 = DELIVERED, 5 = UNDELIVERABLE
+	var messageState int
+
+	// Согласно документации SMSC.RU, статус 1 обычно означает доставлено, остальные — ошибка
+	// Остальная дока: smsc.ru/api/http/status_messages/statuses/
+	if status == 1 {
+		messageState = 2 // DELIVERED
+	} else if status == 0 {
+		// Сообщение было передано на SMS-центр оператора для доставки, но у нас истекли 5 минут ожидания ответа
+		messageState = 1 // ENROUTE (в пути)
+	} else {
+		// Другие статусы считаем не доставленными
+		messageState = 5 // UNDELIVERABLE
+	}
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatusHTTP(): статус обработан",
+			zap.String("messageID", messageID),
+			zap.Int("smscStatus", status),
+			zap.String("time", timeStr),
+			zap.Int("messageState", messageState))
+	}
+
+	return messageState, nil
+}
+
 // isConnectionError проверяет, является ли ошибка ошибкой соединения
 // Проверяет как английские, так и русскоязычные ошибки подключения
 func isConnectionError(err error) bool {
@@ -731,22 +672,4 @@ func (a *SMPPAdapter) Close() error {
 		return a.client.Close()
 	}
 	return nil
-}
-
-// WaitForDeliveryReceipts ожидает завершения всех текущих обработок delivery receipts
-// Возвращает true, если все обработки завершились до истечения таймаута
-// Возвращает false, если таймаут истек
-func (a *SMPPAdapter) WaitForDeliveryReceipts(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		a.deliveryReceiptWg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
 }

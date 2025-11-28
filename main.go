@@ -19,6 +19,11 @@ import (
 )
 
 func main() {
+
+	// Дает время на завершение отправки SMS, обработку ответов о доставке от SMPP и записи в БД
+	// Единая константа для всего приложения
+	const shutdownTimeout = 10 * time.Second
+
 	// Создаем подключение к БД для загрузки конфигурации
 	dbConn, err := db.NewDBConnection()
 	if err != nil {
@@ -38,11 +43,6 @@ func main() {
 	// Создаем контекст для graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Таймаут для завершения операций при graceful shutdown
-	// Дает время на завершение отправки SMS, обработки delivery receipts и записи в БД
-	// Единая константа для всего приложения
-	const shutdownTimeout = 5 * time.Second
 
 	// Настраиваем обработку сигналов для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -109,8 +109,11 @@ func main() {
 		}
 		if success, err := dbConn.SaveSmsResponse(context.Background(), saveParams); !success {
 			if err != nil {
-				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД",
+				// Обрабатываем ошибки соединения с БД (может быть закрыто при shutdown)
+				// Это может произойти, если горутина проверки статуса проснулась после закрытия соединения
+				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД (возможно, соединение закрыто при shutdown)",
 					zap.Int64("taskID", response.TaskID),
+					zap.String("messageID", response.MessageID),
 					zap.Error(err))
 			}
 		} else {
@@ -118,53 +121,6 @@ func main() {
 				zap.Int64("taskID", response.TaskID))
 		}
 	})
-
-	// Создаем очередь для batch-сохранения delivery receipts
-	// Сохраняет пачками по 100 штук или каждые 2 секунды (что раньше)
-	deliveryReceiptQueue := sms.NewDeliveryReceiptQueue(func(receipts []*sms.DeliveryReceipt) (int, error) {
-		// Преобразуем receipts в параметры для batch-сохранения
-		params := make([]db.SaveSmsResponseParams, len(receipts))
-		for i, receipt := range receipts {
-			params[i] = db.SaveSmsResponseParams{
-				TaskID:       -1, // NULL в БД - связь через MessageID
-				MessageID:    receipt.ReceiptedMessageID,
-				StatusID:     receipt.StatusID, // 4 = доставлено, 3 = не доставлено
-				ResponseDate: receipt.ReceivedAt,
-				ErrorText:    receipt.ErrorText,
-			}
-		}
-		return dbConn.SaveSmsResponseBatch(context.Background(), params)
-	})
-	deliveryReceiptQueue.SetShutdownTimeout(shutdownTimeout)
-	smsService.SetDeliveryReceiptQueue(deliveryReceiptQueue)
-
-	// Устанавливаем callback для добавления delivery receipts в очередь
-	// Receipts будут сохраняться пачками для оптимизации производительности
-	smsService.SetDeliveryReceiptCallback(func(receipt *sms.DeliveryReceipt) {
-		if receipt == nil {
-			return
-		}
-		if !deliveryReceiptQueue.Enqueue(receipt) {
-			// Очередь переполнена - пробуем сохранить напрямую как fallback
-			logger.Log.Warn("Очередь delivery receipts переполнена, сохраняем напрямую",
-				zap.String("messageID", receipt.ReceiptedMessageID))
-			saveParams := db.SaveSmsResponseParams{
-				TaskID:       -1,
-				MessageID:    receipt.ReceiptedMessageID,
-				StatusID:     receipt.StatusID,
-				ResponseDate: receipt.ReceivedAt,
-				ErrorText:    receipt.ErrorText,
-			}
-			if _, err := dbConn.SaveSmsResponse(context.Background(), saveParams); err != nil {
-				logger.Log.Error("Ошибка сохранения delivery receipt (fallback)",
-					zap.String("messageID", receipt.ReceiptedMessageID),
-					zap.Error(err))
-			}
-		}
-	})
-
-	// Запускаем очередь delivery receipts
-	smsService.StartDeliveryReceiptQueue()
 
 	// Запускаем очередь отложенных сообщений
 	smsService.StartScheduledQueue(ctx)
@@ -800,22 +756,6 @@ shutdown:
 	logger.Log.Info("Остановка очереди отложенных SMS...",
 		zap.Int("scheduledQueueSize", smsService.GetScheduledQueueSize()))
 	smsService.StopScheduledQueue()
-
-	logger.Log.Info("Ожидание завершения обработки delivery receipts...",
-		zap.Duration("timeout", shutdownTimeout))
-	if !smsService.WaitForAllDeliveryReceipts(shutdownTimeout) {
-		logger.Log.Warn("Таймаут ожидания delivery receipts истек, некоторые receipts могут быть потеряны")
-	}
-
-	// Останавливаем очередь batch-сохранения delivery receipts
-	// Это сохранит все накопленные receipts перед закрытием
-	received, saved, failed, batches := smsService.GetDeliveryReceiptQueueStats()
-	logger.Log.Info("Остановка очереди batch-сохранения delivery receipts...",
-		zap.Int64("totalReceived", received),
-		zap.Int64("totalSaved", saved),
-		zap.Int64("totalFailed", failed),
-		zap.Int64("batchesSaved", batches))
-	smsService.StopDeliveryReceiptQueue()
 
 	logger.Log.Info("Закрытие SMPP адаптеров...")
 	if err := smsService.Close(); err != nil {
