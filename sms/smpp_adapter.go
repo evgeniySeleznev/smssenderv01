@@ -20,13 +20,10 @@ import (
 
 // Константы для TON и NPI согласно стандарту SMPP
 const (
-	TONUnknown       uint8 = 0 // Unknown
 	TONInternational uint8 = 1 // International number
 	TONNational      uint8 = 2 // National number
-	TONAlphanumeric  uint8 = 5 // Alphanumeric (для буквенных адресов отправителя)
 	NPINational      uint8 = 8 // National numbering plan
 	NPIIsdn          uint8 = 1 // ISDN numbering plan
-	NPIUnknown       uint8 = 0 // Unknown numbering plan
 	PriorityHighest  uint8 = 3 // Highest priority
 )
 
@@ -361,10 +358,9 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	// Форматирование номера: добавляем префикс "+7"
 	destinationAddress := "+7" + number
 
-	// Определяем значения TON и NPI для source address
-	sourceTON := TONUnknown
-	sourceNPI := NPIUnknown
-
+	// Определяем значения TON и NPI
+	sourceTON := TONInternational
+	sourceNPI := NPINational
 	destTON := TONInternational
 	destNPI := NPINational
 
