@@ -8,9 +8,7 @@ import (
 	"time"
 
 	"github.com/fiorix/go-smpp/smpp"
-	"github.com/fiorix/go-smpp/smpp/pdu/pdufield"
 	"github.com/fiorix/go-smpp/smpp/pdu/pdutext"
-	"github.com/fiorix/go-smpp/smpp/pdu/pdutlv"
 	"go.uber.org/zap"
 
 	"oracle-client/logger"
@@ -380,18 +378,12 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	req := &smpp.ShortMessage{
 		Src:           senderName,
 		Dst:           destinationAddress,
-		Text:          pdutext.UCS2(text),              // UCS-2 кодировка
-		Register:      pdufield.FailureDeliveryReceipt, // OnSuccessOrFailure (0x02)
+		Text:          pdutext.UCS2(text), // UCS-2 кодировка
 		SourceAddrTON: sourceTON,
 		SourceAddrNPI: sourceNPI,
 		DestAddrTON:   destTON,
 		DestAddrNPI:   destNPI,
 		PriorityFlag:  PriorityHighest, // Highest priority (3)
-	}
-
-	// Добавление TLV для AlertOnMsgDelivery (0x1) - пустое значение означает включение уведомления
-	req.TLVFields = pdutlv.Fields{
-		pdutlv.TagAlertOnMessageDelivery: pdutlv.CString(""),
 	}
 
 	// Отправка с автоматическим переподключением при ошибке
@@ -465,6 +457,108 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 
 	a.lastAnswerTime = time.Now()
 	return smsID, nil
+}
+
+// QuerySMSStatus запрашивает статус доставки SMS через команду QUERY_SM
+// messageID - ID сообщения, полученный при отправке
+// sourceAddr - адрес отправителя (source address)
+// sourceTON - тип номера отправителя (TON)
+// sourceNPI - план нумерации отправителя (NPI)
+// Возвращает статус доставки (message_state) и ошибку
+// Статусы: 2 = DELIVERED (доставлено), 3 = EXPIRED (истекло), 5 = UNDELIVERABLE (не доставлено)
+func (a *SMPPAdapter) QuerySMSStatus(messageID, sourceAddr string) (int, error) {
+	// Проверяем соединение
+	if !a.IsConnected() {
+		if logger.Log != nil {
+			logger.Log.Debug("QuerySMSStatus(): соединение не установлено, выполняется подключение")
+		}
+		if err := a.Bind(); err != nil {
+			return 0, fmt.Errorf("ошибка подключения: %w", err)
+		}
+	}
+
+	// Определяем значения TON и NPI для source address
+	sourceTON := TONInternational
+	sourceNPI := NPINational
+
+	// Применение опциональных параметров адресов из конфигурации
+	if a.config.SourceTon != nil {
+		sourceTON = uint8(*a.config.SourceTon)
+	}
+	if a.config.SourceNpi != nil {
+		sourceNPI = uint8(*a.config.SourceNpi)
+	}
+
+	// Отправляем запрос QUERY_SM
+	// Сигнатура метода: QuerySM(messageID, sourceAddr string, sourceTON, sourceNPI uint8)
+	resp, err := a.client.QuerySM(messageID, sourceAddr, sourceTON, sourceNPI)
+	if err != nil {
+		// Проверяем, является ли ошибка ошибкой соединения
+		if isConnectionError(err) {
+			if logger.Log != nil {
+				logger.Log.Warn("QuerySMSStatus(): обнаружена ошибка соединения", zap.Error(err))
+			}
+			// Помечаем соединение как разорванное
+			a.mu.Lock()
+			a.isConnected = false
+			a.mu.Unlock()
+			return 0, fmt.Errorf("ошибка соединения: %w", err)
+		}
+		return 0, fmt.Errorf("ошибка запроса статуса: %w", err)
+	}
+
+	// Обновляем время последнего ответа
+	a.mu.Lock()
+	a.lastAnswerTime = time.Now()
+	a.mu.Unlock()
+
+	// Извлекаем message_state из ответа
+	// QueryResp имеет поле MsgState типа string
+	if resp == nil {
+		return 0, fmt.Errorf("пустой ответ от QuerySM")
+	}
+
+	// Преобразуем строковый статус в числовой
+	// Статусы SMPP: "DELIVRD" (доставлено), "UNDELIV" (не доставлено), "EXPIRED" (истекло)
+	// Возвращаем числовые значения: 2 = DELIVERED, 3 = EXPIRED, 5 = UNDELIVERABLE
+	msgState := strings.ToUpper(strings.TrimSpace(resp.MsgState))
+	var messageState int
+
+	switch msgState {
+	case "DELIVRD", "DELIVERED":
+		messageState = 2 // DELIVERED
+	case "EXPIRED":
+		messageState = 3 // EXPIRED
+	case "UNDELIV", "UNDELIVERABLE":
+		messageState = 5 // UNDELIVERABLE
+	case "ENROUTE":
+		messageState = 1 // ENROUTE
+	case "DELETED":
+		messageState = 4 // DELETED
+	case "ACCEPTED", "ACCEPTD":
+		messageState = 6 // ACCEPTED
+	case "UNKNOWN":
+		messageState = 7 // UNKNOWN
+	case "REJECTED", "REJECTD":
+		messageState = 8 // REJECTED
+	default:
+		// Неизвестный статус - считаем не доставленным
+		if logger.Log != nil {
+			logger.Log.Warn("QuerySMSStatus(): неизвестный статус",
+				zap.String("messageID", messageID),
+				zap.String("msgState", msgState))
+		}
+		messageState = 5 // UNDELIVERABLE по умолчанию
+	}
+
+	if logger.Log != nil {
+		logger.Log.Debug("QuerySMSStatus(): получен статус",
+			zap.String("messageID", messageID),
+			zap.String("msgState", msgState),
+			zap.Int("messageState", messageState))
+	}
+
+	return messageState, nil
 }
 
 // isConnectionError проверяет, является ли ошибка ошибкой соединения

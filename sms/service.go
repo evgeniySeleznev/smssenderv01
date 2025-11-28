@@ -28,7 +28,7 @@ type SMSMessage struct {
 type SMSResponse struct {
 	TaskID    int64
 	MessageID string
-	Status    int // 2 = отправлено, 3 = ошибка, 4 = доставлено
+	Status    int // 2 = отправлено, 3 = ошибка/не доставлено, 4 = доставлено
 	ErrorText string
 	SentAt    time.Time
 }
@@ -54,9 +54,10 @@ type Service struct {
 	retryQueueMu   sync.Mutex           // Мьютекс для защиты очереди повторных попыток
 	retryWg        sync.WaitGroup       // WaitGroup для ожидания завершения горутины повторных попыток
 	retryStop      chan struct{}        // Канал для остановки механизма повторных попыток
-	retryStarted   bool                 // Флаг запуска механизма повторных попыток
-	scheduledQueue *ScheduledQueue      // Очередь отложенных сообщений (для schedule=1 вне окна)
-	saveCallback   SaveResponseCallback // Callback для сохранения результата в БД
+	retryStarted      bool                 // Флаг запуска механизма повторных попыток
+	scheduledQueue    *ScheduledQueue      // Очередь отложенных сообщений (для schedule=1 вне окна)
+	saveCallback      SaveResponseCallback // Callback для сохранения результата в БД
+	statusChecker     *StatusChecker       // Компонент для проверки статуса доставки SMS
 }
 
 // NewService создает новый сервис отправки SMS
@@ -73,6 +74,8 @@ func NewService(cfg *Config) *Service {
 	}
 	// Создаем очередь отложенных сообщений
 	s.scheduledQueue = NewScheduledQueue(cfg, s)
+	// Создаем компонент для проверки статуса доставки
+	s.statusChecker = NewStatusChecker(s)
 	return s
 }
 
@@ -288,6 +291,13 @@ func (s *Service) StopPeriodicRebind() {
 	}
 }
 
+// startStatusCheck запускает горутину для проверки статуса доставки SMS через 5 минут
+func (s *Service) startStatusCheck(taskID int64, messageID, senderName string, smppID int) {
+	if s.statusChecker != nil {
+		s.statusChecker.StartStatusCheck(taskID, messageID, senderName, smppID)
+	}
+}
+
 // Close закрывает все SMPP адаптеры и освобождает ресурсы
 // Перед вызовом Close() рекомендуется вызвать StopPeriodicRebind() и StopRetryWorker() для остановки механизмов
 func (s *Service) Close() error {
@@ -296,6 +306,14 @@ func (s *Service) Close() error {
 
 	// Останавливаем очередь отложенных сообщений
 	s.StopScheduledQueue()
+
+	// Ждем завершения всех горутин проверки статуса
+	if s.statusChecker != nil {
+		if logger.Log != nil {
+			logger.Log.Info("Ожидание завершения проверки статусов доставки...")
+		}
+		s.statusChecker.Wait()
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -481,6 +499,9 @@ func (s *Service) ProcessSMS(ctx context.Context, msg SMSMessage) (*SMSResponse,
 			zap.String("phone", phoneNumber),
 			zap.String("sender", msg.SenderName))
 	}
+
+	// Запускаем горутину для проверки статуса доставки через 5 минут
+	s.startStatusCheck(msg.TaskID, messageID, msg.SenderName, msg.SMPPID)
 
 	return &SMSResponse{
 		TaskID:    msg.TaskID,
