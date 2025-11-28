@@ -387,6 +387,17 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 		destNPI = uint8(*a.config.DestNpi)
 	}
 
+	// Логируем параметры TON/NPI для отладки
+	if logger.Log != nil {
+		logger.Log.Debug("SendSMS(): параметры адресов",
+			zap.String("senderName", senderName),
+			zap.String("destinationAddress", destinationAddress),
+			zap.Uint8("sourceTON", sourceTON),
+			zap.Uint8("sourceNPI", sourceNPI),
+			zap.Uint8("destTON", destTON),
+			zap.Uint8("destNPI", destNPI))
+	}
+
 	// Создание PDU для отправки с параметрами из руководства
 	req := &smpp.ShortMessage{
 		Src:           senderName,
