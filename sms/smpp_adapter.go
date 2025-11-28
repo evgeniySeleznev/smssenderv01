@@ -360,16 +360,10 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	// Определяем значения TON и NPI для source address
 	// Для буквенных адресов (alphanumeric) используем TON=5 (Alphanumeric), NPI=0 (Unknown)
 	// Для числовых адресов используем TON=1 (International), NPI=8 (National)
-	var sourceTON, sourceNPI uint8
-	if isAlphanumericAddress(senderName) {
-		// Буквенный адрес отправителя (например, "MRNC_NMIC_R")
-		sourceTON = TONUnknown
-		sourceNPI = NPIUnknown
-	} else {
-		// Числовой адрес отправителя
-		sourceTON = TONInternational
-		sourceNPI = NPINational
-	}
+
+	sourceTON := TONUnknown
+	sourceNPI := NPIUnknown
+
 	destTON := TONInternational
 	destNPI := NPINational
 
