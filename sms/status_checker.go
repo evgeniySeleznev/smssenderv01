@@ -1,7 +1,6 @@
 package sms
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -15,18 +14,12 @@ import (
 type StatusChecker struct {
 	service *Service
 	checkWg sync.WaitGroup
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.RWMutex
 }
 
 // NewStatusChecker создает новый StatusChecker
 func NewStatusChecker(service *Service) *StatusChecker {
-	ctx, cancel := context.WithCancel(context.Background())
 	return &StatusChecker{
 		service: service,
-		ctx:     ctx,
-		cancel:  cancel,
 	}
 }
 
@@ -50,25 +43,9 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 	go func() {
 		defer sc.checkWg.Done()
 
-		// Получаем контекст для проверки отмены
-		sc.mu.RLock()
-		ctx := sc.ctx
-		sc.mu.RUnlock()
-
-		// Ждем 5 минут перед запросом статуса с возможностью прерывания
-		// Если контекст отменится во время ожидания, горутина завершится немедленно
-		select {
-		case <-ctx.Done():
-			// Контекст отменен - завершаем горутину без проверки статуса
-			if logger.Log != nil {
-				logger.Log.Debug("Проверка статуса отменена (shutdown)",
-					zap.Int64("taskID", taskID),
-					zap.String("messageID", messageID))
-			}
-			return
-		case <-time.After(5 * time.Minute):
-			// Прошло 5 минут - продолжаем проверку статуса
-		}
+		// Ждем 5 минут перед запросом статуса
+		// Используем простой time.Sleep - горутина может проснуться после закрытия соединений
+		time.Sleep(5 * time.Minute)
 
 		// Получаем адаптер для запроса статуса
 		sc.service.mu.RLock()
@@ -77,7 +54,18 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 
 		if !ok || adapter == nil {
 			if logger.Log != nil {
-				logger.Log.Warn("Не удалось получить адаптер для проверки статуса",
+				logger.Log.Warn("Не удалось получить адаптер для проверки статуса (адаптер не найден или удален)",
+					zap.Int64("taskID", taskID),
+					zap.String("messageID", messageID),
+					zap.Int("smppID", smppID))
+			}
+			return
+		}
+
+		// Проверяем, подключен ли адаптер (может быть закрыт при shutdown)
+		if !adapter.IsConnected() {
+			if logger.Log != nil {
+				logger.Log.Warn("SMPP адаптер не подключен при проверке статуса (возможно, соединение закрыто при shutdown)",
 					zap.Int64("taskID", taskID),
 					zap.String("messageID", messageID),
 					zap.Int("smppID", smppID))
@@ -88,8 +76,9 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 		// Запрашиваем статус доставки
 		messageState, err := adapter.QuerySMSStatus(messageID, senderName)
 		if err != nil {
+			// Обрабатываем ошибки соединения (может быть закрыто при shutdown)
 			if logger.Log != nil {
-				logger.Log.Error("Ошибка запроса статуса доставки SMS",
+				logger.Log.Error("Ошибка запроса статуса доставки SMS (возможно, соединение закрыто при shutdown)",
 					zap.Int64("taskID", taskID),
 					zap.String("messageID", messageID),
 					zap.Error(err))
@@ -136,10 +125,12 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 				ErrorText: errorText,
 				SentAt:    time.Now(),
 			}
+			// Вызываем callback - он может вернуть ошибку, если БД соединение закрыто
+			// Ошибка будет обработана внутри callback (в main.go), но мы логируем здесь для ясности
 			saveCallback(response)
 		} else {
 			if logger.Log != nil {
-				logger.Log.Warn("Callback для сохранения статуса не установлен",
+				logger.Log.Warn("Callback для сохранения статуса не установлен (возможно, приложение завершается)",
 					zap.Int64("taskID", taskID),
 					zap.String("messageID", messageID))
 			}
@@ -147,16 +138,10 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 	}()
 }
 
-// Stop отменяет контекст, что приводит к немедленному завершению всех горутин проверки статуса
+// Stop останавливает проверку статусов (для совместимости, но не прерывает горутины с time.Sleep)
+// Горутины продолжат работу и обработают ошибки соединения при попытке использования закрытых ресурсов
 func (sc *StatusChecker) Stop() {
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-	if sc.cancel != nil {
-		sc.cancel()
+	if logger.Log != nil {
+		logger.Log.Info("Остановка проверки статусов (горутины могут продолжить работу после закрытия соединений)")
 	}
-}
-
-// Wait ожидает завершения всех горутин проверки статуса
-func (sc *StatusChecker) Wait() {
-	sc.checkWg.Wait()
 }

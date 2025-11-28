@@ -54,10 +54,10 @@ type Service struct {
 	retryQueueMu   sync.Mutex           // Мьютекс для защиты очереди повторных попыток
 	retryWg        sync.WaitGroup       // WaitGroup для ожидания завершения горутины повторных попыток
 	retryStop      chan struct{}        // Канал для остановки механизма повторных попыток
-	retryStarted      bool                 // Флаг запуска механизма повторных попыток
-	scheduledQueue    *ScheduledQueue      // Очередь отложенных сообщений (для schedule=1 вне окна)
-	saveCallback      SaveResponseCallback // Callback для сохранения результата в БД
-	statusChecker     *StatusChecker       // Компонент для проверки статуса доставки SMS
+	retryStarted   bool                 // Флаг запуска механизма повторных попыток
+	scheduledQueue *ScheduledQueue      // Очередь отложенных сообщений (для schedule=1 вне окна)
+	saveCallback   SaveResponseCallback // Callback для сохранения результата в БД
+	statusChecker  *StatusChecker       // Компонент для проверки статуса доставки SMS
 }
 
 // NewService создает новый сервис отправки SMS
@@ -307,17 +307,14 @@ func (s *Service) Close() error {
 	// Останавливаем очередь отложенных сообщений
 	s.StopScheduledQueue()
 
-	// Останавливаем проверку статусов (отменяем контекст для немедленного завершения горутин)
+	// Останавливаем проверку статусов (не ждем завершения горутин - они могут проснуться после закрытия соединений)
 	if s.statusChecker != nil {
 		if logger.Log != nil {
-			logger.Log.Info("Остановка проверки статусов доставки...")
+			logger.Log.Info("Остановка проверки статусов доставки (горутины могут продолжить работу после закрытия соединений)")
 		}
 		s.statusChecker.Stop()
-		// Ждем завершения всех горутин проверки статуса
-		if logger.Log != nil {
-			logger.Log.Info("Ожидание завершения горутин проверки статусов...")
-		}
-		s.statusChecker.Wait()
+		// НЕ вызываем Wait() - горутины с time.Sleep могут проснуться после закрытия соединений
+		// Они обработают ошибки соединения и залогируют их
 	}
 
 	s.mu.Lock()

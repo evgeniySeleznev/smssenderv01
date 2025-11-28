@@ -109,8 +109,11 @@ func main() {
 		}
 		if success, err := dbConn.SaveSmsResponse(context.Background(), saveParams); !success {
 			if err != nil {
-				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД",
+				// Обрабатываем ошибки соединения с БД (может быть закрыто при shutdown)
+				// Это может произойти, если горутина проверки статуса проснулась после закрытия соединения
+				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД (возможно, соединение закрыто при shutdown)",
 					zap.Int64("taskID", response.TaskID),
+					zap.String("messageID", response.MessageID),
 					zap.Error(err))
 			}
 		} else {
