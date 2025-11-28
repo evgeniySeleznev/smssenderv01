@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultSmsResponseQueueSize  = 2000
-	defaultSmsResponseBatchSize  = 50
+	defaultSmsResponseQueueSize    = 2000
+	defaultSmsResponseBatchSize    = 50
 	defaultSmsResponseBatchTimeout = 1 * time.Second
 )
 
@@ -215,4 +215,3 @@ func (q *SmsResponseQueue) SetShutdownTimeout(timeout time.Duration) {
 func (q *SmsResponseQueue) GetQueueSize() int {
 	return len(q.queue)
 }
-

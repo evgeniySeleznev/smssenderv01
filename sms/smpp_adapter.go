@@ -83,6 +83,7 @@ type SMPPAdapter struct {
 	batchDeliveryReceiptCallback BatchDeliveryReceiptCallback // Callback для batch-обработки receipts
 	deliveryReceiptWg            sync.WaitGroup               // WaitGroup для ожидания завершения обработки receipts
 	deliveryReceiptWgMu          sync.Mutex                   // Мьютекс для защиты WaitGroup от повторного использования
+	deliveryReceiptWaitRunning   bool                         // Флаг, что Wait() уже запущен
 	deliveryReceiptQueue         chan *DeliveryReceipt        // Буферная очередь для delivery receipts
 	receiptWorkerStop            chan struct{}                // Канал для остановки воркера очереди
 	receiptWorkerRunning         bool                         // Флаг работы воркера
@@ -934,16 +935,38 @@ func (a *SMPPAdapter) WaitForDeliveryReceipts(timeout time.Duration) bool {
 	a.deliveryReceiptWgMu.Lock()
 	defer a.deliveryReceiptWgMu.Unlock()
 
+	// Используем канал для сигнализации завершения и отмены
 	done := make(chan struct{})
+	cancel := make(chan struct{})
+	
 	go func() {
+		// Вызываем Wait() в горутине
 		a.deliveryReceiptWg.Wait()
-		close(done)
+		
+		// Проверяем, не была ли операция отменена
+		select {
+		case <-cancel:
+			// Операция была отменена, просто выходим
+			return
+		default:
+			// Операция завершена успешно
+			select {
+			case done <- struct{}{}:
+			default:
+				// Канал уже закрыт или заблокирован
+			}
+		}
 	}()
 
 	select {
 	case <-done:
+		close(cancel)
 		return true
 	case <-time.After(timeout):
+		// Таймаут - отменяем горутину
+		close(cancel)
+		// Даем горутине время завершиться
+		time.Sleep(10 * time.Millisecond)
 		return false
 	}
 }
