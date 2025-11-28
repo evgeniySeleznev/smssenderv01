@@ -2,7 +2,6 @@ package sms
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -13,7 +12,6 @@ import (
 // StatusChecker представляет компонент для проверки статуса доставки SMS
 type StatusChecker struct {
 	service *Service
-	checkWg sync.WaitGroup
 }
 
 // NewStatusChecker создает новый StatusChecker
@@ -39,10 +37,7 @@ func (sc *StatusChecker) StartStatusCheck(taskID int64, messageID, senderName st
 		return
 	}
 
-	sc.checkWg.Add(1)
 	go func() {
-		defer sc.checkWg.Done()
-
 		// Ждем 5 минут перед запросом статуса
 		// Используем простой time.Sleep - горутина может проснуться после закрытия соединений
 		time.Sleep(5 * time.Minute)
