@@ -185,6 +185,14 @@ func (s *Service) GetScheduledQueueSize() int {
 	return 0
 }
 
+// SetShutdownTimeout устанавливает таймаут для graceful shutdown
+// Влияет на очередь отложенных сообщений и другие операции завершения
+func (s *Service) SetShutdownTimeout(timeout time.Duration) {
+	if s.scheduledQueue != nil {
+		s.scheduledQueue.SetShutdownTimeout(timeout)
+	}
+}
+
 // StartPeriodicRebind запускает горутину для периодического переподключения SMPP адаптеров
 func (s *Service) StartPeriodicRebind() {
 	s.mu.Lock()

@@ -22,24 +22,33 @@ type ScheduledMessage struct {
 // При наступлении TimeStart на следующий день сообщения отправляются с интервалом 30мс.
 // При закрытии программы все сообщения теряются (это нормально).
 type ScheduledQueue struct {
-	cfg      *Config
-	service  *Service // Ссылка на SMS сервис для отправки
-	messages []*ScheduledMessage
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	stopChan chan struct{}
-	started  bool
-	startMu  sync.Mutex
+	cfg             *Config
+	service         *Service // Ссылка на SMS сервис для отправки
+	messages        []*ScheduledMessage
+	mu              sync.Mutex
+	wg              sync.WaitGroup
+	stopChan        chan struct{}
+	started         bool
+	startMu         sync.Mutex
+	shutdownTimeout time.Duration // Таймаут для graceful shutdown (по умолчанию 5 секунд)
 }
 
 // NewScheduledQueue создает новую очередь отложенных сообщений
 func NewScheduledQueue(cfg *Config, service *Service) *ScheduledQueue {
 	return &ScheduledQueue{
-		cfg:      cfg,
-		service:  service,
-		messages: make([]*ScheduledMessage, 0),
-		stopChan: make(chan struct{}),
+		cfg:             cfg,
+		service:         service,
+		messages:        make([]*ScheduledMessage, 0),
+		stopChan:        make(chan struct{}),
+		shutdownTimeout: 5 * time.Second, // Значение по умолчанию
 	}
+}
+
+// SetShutdownTimeout устанавливает таймаут для graceful shutdown
+func (q *ScheduledQueue) SetShutdownTimeout(timeout time.Duration) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.shutdownTimeout = timeout
 }
 
 // IsWithinSchedule проверяет, находится ли текущее время в пределах окна расписания
@@ -161,7 +170,7 @@ func (q *ScheduledQueue) worker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			// Graceful shutdown - даем 5 секунд на завершение
+			// Graceful shutdown - даем shutdownTimeout секунд на завершение
 			if logger.Log != nil {
 				logger.Log.Info("Получен сигнал остановки для очереди отложенных SMS, начинаем graceful shutdown")
 			}
@@ -291,12 +300,11 @@ func (q *ScheduledQueue) sendScheduledMessage(ctx context.Context, scheduledMsg 
 	}
 }
 
-// gracefulShutdown выполняет корректное завершение с таймаутом 5 секунд
+// gracefulShutdown выполняет корректное завершение с таймаутом
 func (q *ScheduledQueue) gracefulShutdown() {
-	const shutdownTimeout = 5 * time.Second
-
 	q.mu.Lock()
 	queueSize := len(q.messages)
+	timeout := q.shutdownTimeout
 	q.mu.Unlock()
 
 	if queueSize == 0 {
@@ -309,11 +317,11 @@ func (q *ScheduledQueue) gracefulShutdown() {
 	if logger.Log != nil {
 		logger.Log.Warn("Graceful shutdown: сообщения в очереди отложенных будут потеряны",
 			zap.Int("queueSize", queueSize),
-			zap.Duration("shutdownTimeout", shutdownTimeout))
+			zap.Duration("shutdownTimeout", timeout))
 	}
 
 	// Создаем контекст с таймаутом для последней попытки отправки
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Пытаемся отправить сколько успеем за 5 секунд

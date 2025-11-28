@@ -39,8 +39,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Таймаут для завершения операций при graceful shutdown
-	// Дает время на завершение отправки SMS и записи в БД
+	// Дает время на завершение отправки SMS, обработки delivery receipts и записи в БД
+	// Единая константа для всего приложения
 	const shutdownTimeout = 5 * time.Second
 
 	// Настраиваем обработку сигналов для graceful shutdown
@@ -84,6 +84,9 @@ func main() {
 
 	// Устанавливаем функцию получения тестового номера для режима Debug
 	smsService.SetTestPhoneGetter(dbConn.GetTestPhone)
+
+	// Устанавливаем единый таймаут для graceful shutdown
+	smsService.SetShutdownTimeout(shutdownTimeout)
 
 	// Инициализируем SMPP адаптеры заранее (подключаемся ко всем провайдерам)
 	if err := smsService.InitializeAdapters(); err != nil {
@@ -378,7 +381,7 @@ func main() {
 	}
 
 	// Graceful shutdown: завершаем все компоненты
-	performGracefulShutdown(shutdownCtx, smsService, dbConn, &allHandlersWg)
+	performGracefulShutdown(shutdownCtx, smsService, dbConn, &allHandlersWg, shutdownTimeout)
 }
 
 // runQueueProcessingLoop выполняет основной цикл чтения и обработки сообщений из очереди
@@ -692,8 +695,8 @@ func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 }
 
 // performGracefulShutdown выполняет корректное завершение всех операций
-// Принимает контекст с таймаутом для контроля времени завершения
-func performGracefulShutdown(ctx context.Context, smsService *sms.Service, dbConn *db.DBConnection, allHandlersWg *sync.WaitGroup) {
+// Принимает контекст с таймаутом для контроля времени завершения и единый таймаут shutdown
+func performGracefulShutdown(ctx context.Context, smsService *sms.Service, dbConn *db.DBConnection, allHandlersWg *sync.WaitGroup, shutdownTimeout time.Duration) {
 	logger.Log.Info("Завершение graceful shutdown...")
 
 	// Проверяем, есть ли еще активные операции
@@ -702,8 +705,8 @@ func performGracefulShutdown(ctx context.Context, smsService *sms.Service, dbCon
 		logger.Log.Info("Ожидание завершения активных операций с БД",
 			zap.Int32("activeOperations", activeOps))
 		// Даем дополнительное время на завершение операций с БД
-		// Используем короткий таймаут для проверки
-		checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
+		// Используем единый таймаут shutdown
+		checkCtx, checkCancel := context.WithTimeout(ctx, shutdownTimeout)
 		defer checkCancel()
 
 		ticker := time.NewTicker(500 * time.Millisecond)

@@ -303,8 +303,8 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 
 	if timeSinceLastAnswer < rebindInterval {
 		// Еще не время для переподключения
-		// Логируем только если прошло более 80% интервала и прошло более 5 секунд с последнего логирования
-		if timeSinceLastAnswer > rebindInterval*80/100 {
+		// Логируем только если прошло более 90% интервала и прошло более 5 секунд с последнего логирования
+		if timeSinceLastAnswer > rebindInterval*90/100 {
 			timeSinceLastLog := time.Since(a.lastRebindLogTime)
 			if timeSinceLastLog >= 5*time.Second {
 				if logger.Log != nil {
