@@ -32,5 +32,5 @@ go.work
 Thumbs.db
 
 # Settings with sensitive data
-settings/db_settings.ini
+settings/settings.ini
 

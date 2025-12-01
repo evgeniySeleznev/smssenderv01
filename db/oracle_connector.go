@@ -39,10 +39,10 @@ type DBConnection struct {
 	activeOps         atomic.Int32  // Счетчик активных операций с БД
 }
 
-// NewDBConnection загружает конфигурацию из settings/db_settings.ini.
+// NewDBConnection загружает конфигурацию из settings/settings.ini.
 // Ожидаются секция [main] и ключи: username, password, dsn, username_write, password_write.
 func NewDBConnection() (*DBConnection, error) {
-	settingsPath := "./settings/db_settings.ini"
+	settingsPath := "./settings/settings.ini"
 	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
 		// Используем стандартный вывод до инициализации логгера
 		os.Stderr.WriteString(fmt.Sprintf("файл настроек не найден: %s\n", settingsPath))
@@ -60,7 +60,7 @@ func NewDBConnection() (*DBConnection, error) {
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		reconnectInterval: 1 * time.Minute, // 30 минут по умолчанию
+		reconnectInterval: 30 * time.Minute, // 30 минут по умолчанию
 		reconnectStop:     make(chan struct{}),
 		lastReconnect:     time.Now(),
 	}, nil
