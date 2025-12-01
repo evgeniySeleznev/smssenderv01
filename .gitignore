@@ -34,3 +34,10 @@ Thumbs.db
 # Settings with sensitive data
 settings/settings.ini
 
+# Docker and deployment files
+Dockerfile
+compose.yaml
+docker-compose.yaml
+docker-compose.yml
+_installDir/
+
