@@ -60,7 +60,7 @@ func NewDBConnection() (*DBConnection, error) {
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		reconnectInterval: 30 * time.Minute, // 30 минут по умолчанию
+		reconnectInterval: 1 * time.Minute, // 30 минут по умолчанию
 		reconnectStop:     make(chan struct{}),
 		lastReconnect:     time.Now(),
 	}, nil
