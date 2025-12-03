@@ -69,8 +69,18 @@ func NewDBConnection() (*DBConnection, error) {
 
 // OpenConnection открывает подключение к Oracle через драйвер godror (Oracle Instant Client).
 func (d *DBConnection) OpenConnection() error {
+	// Блокируем мьютекс только для проверки и установки соединения
+	// Разблокируем перед сетевыми операциями
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	if d.db != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("соединение уже открыто")
+	}
+	d.mu.Unlock()
+
+	// Выполняем открытие соединения БЕЗ блокировки мьютекса
+	// (сетевые операции могут занять время)
+	// openConnectionInternal устанавливает соединение под блокировкой мьютекса
 	return d.openConnectionInternal()
 }
 
@@ -162,32 +172,29 @@ func (d *DBConnection) Reconnect() error {
 		}
 	}
 
-	// Получаем блокировку для переподключения
+	// Получаем блокировку для закрытия старого соединения
 	// К этому моменту активные операции должны быть завершены
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	oldDB := d.db
+	d.db = nil // Сбрасываем соединение под блокировкой
+	d.mu.Unlock()
 
-	// Финальная проверка под блокировкой (на случай гонки)
-	finalActiveCount := d.activeOps.Load()
-	if finalActiveCount > 0 && logger.Log != nil {
-		logger.Log.Warn("Обнаружены активные операции под блокировкой, продолжаем переподключение",
-			zap.Int32("activeOps", finalActiveCount))
+	// Закрываем текущий пул соединений БЕЗ блокировки мьютекса
+	// (операция закрытия может занять время)
+	if oldDB != nil {
+		_ = oldDB.Close()
+		if logger.Log != nil {
+			logger.Log.Debug("Текущий пул соединений закрыт")
+		}
 	}
 
 	if logger.Log != nil {
 		logger.Log.Info("Начало переподключения к базе данных...")
 	}
 
-	// Закрываем текущий пул соединений
-	if d.db != nil {
-		_ = d.db.Close()
-		d.db = nil
-		if logger.Log != nil {
-			logger.Log.Debug("Текущий пул соединений закрыт")
-		}
-	}
-
-	// Пересоздаем подключение (открываем новый пул)
+	// Пересоздаем подключение БЕЗ блокировки мьютекса
+	// (сетевые операции могут занять время)
+	// openConnectionInternal устанавливает соединение под блокировкой мьютекса
 	if err := d.openConnectionInternal(); err != nil {
 		return fmt.Errorf("ошибка переподключения: %w", err)
 	}
@@ -314,8 +321,13 @@ func (d *DBConnection) openConnectionInternal() error {
 		}
 		return fmt.Errorf("ошибка ping: %w", err)
 	}
+
+	// Устанавливаем соединение под блокировкой мьютекса
+	d.mu.Lock()
 	d.db = db
 	d.lastReconnect = time.Now()
+	d.mu.Unlock()
+
 	if logger.Log != nil {
 		logger.Log.Info("Database connection opened (using Oracle Instant Client via godror)")
 	}
