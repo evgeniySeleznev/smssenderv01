@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,7 +31,7 @@ type DBConnection struct {
 	db                *sql.DB
 	ctx               context.Context
 	cancel            context.CancelFunc
-	mu                sync.Mutex // Блокировка для потокобезопасного доступа к БД
+	mu                sync.RWMutex // Блокировка для потокобезопасного доступа к БД (RWMutex для параллельного чтения)
 	reconnectTicker   *time.Ticker
 	reconnectStop     chan struct{}
 	reconnectWg       sync.WaitGroup
@@ -92,12 +93,16 @@ func (d *DBConnection) CloseConnection() {
 
 // CheckConnection проверяет соединение с БД (аналогично Python: connection.ping())
 func (d *DBConnection) CheckConnection() bool {
-	if d.db == nil {
+	d.mu.RLock()
+	db := d.db
+	d.mu.RUnlock()
+
+	if db == nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
-	if err := d.db.PingContext(ctx); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		if logger.Log != nil {
 			logger.Log.Debug("Ошибка проверки соединения", zap.Error(err))
 		}
@@ -293,8 +298,19 @@ func (d *DBConnection) openConnectionInternal() error {
 	defer pingCancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
+		// Проверяем, не является ли это временной проблемой с сетью
+		errStr := err.Error()
+		isNetworkError := strings.Contains(errStr, "context deadline exceeded") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "ORA-12170") ||
+			strings.Contains(errStr, "ORA-12545")
+
 		if logger.Log != nil {
-			logger.Log.Error("Ошибка ping", zap.Error(err))
+			if isNetworkError {
+				logger.Log.Debug("Временная проблема с сетью при проверке соединения", zap.Error(err))
+			} else {
+				logger.Log.Error("Ошибка ping", zap.Error(err))
+			}
 		}
 		return fmt.Errorf("ошибка ping: %w", err)
 	}
@@ -381,80 +397,163 @@ func (d *DBConnection) GetConfig() *ini.File {
 	return d.cfg
 }
 
-// GetTestPhone получает тестовый номер телефона из Oracle через процедуру pcsystem.PKG_SMS.GET_TEST_PHONE()
-// Аналог C# метода OracleAdapter.LockGetTestPhone
-// Использует блокировку для потокобезопасности
-func (d *DBConnection) GetTestPhone() (string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// WithDB выполняет функцию с безопасным доступом к соединению БД
+// Гарантирует, что соединение не будет закрыто во время выполнения функции
+// Использует RWMutex для параллельного чтения
+func (d *DBConnection) WithDB(fn func(*sql.DB) error) error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 
 	if d.db == nil {
-		return "", fmt.Errorf("соединение с БД не открыто")
+		return fmt.Errorf("соединение с БД не открыто")
 	}
 
+	return fn(d.db)
+}
+
+// WithDBTx выполняет функцию с транзакцией и безопасным доступом к соединению
+// Гарантирует, что соединение не будет закрыто во время транзакции
+// Отмечает начало операции с БД для предотвращения переподключения во время транзакции
+func (d *DBConnection) WithDBTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	// Отмечаем начало операции ПОД блокировкой
+	d.mu.Lock()
+	if d.db == nil {
+		d.mu.Unlock()
+		return fmt.Errorf("соединение с БД не открыто")
+	}
+	d.BeginOperation()
+	db := d.db
+	d.mu.Unlock()
+
+	defer d.EndOperation()
+
+	// Создаем транзакцию БЕЗ блокировки (соединение уже получено, счетчик активных операций > 0)
+	txTimeout := execTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 && remaining < execTimeout {
+			txTimeout = remaining
+		}
+	}
+	txCtx, txCancel := context.WithTimeout(ctx, txTimeout)
+	defer txCancel()
+
+	tx, err := db.BeginTx(txCtx, nil)
+	if err != nil {
+		// Проверяем, не является ли это ошибкой закрытого соединения
+		errStr := err.Error()
+		if strings.Contains(errStr, "ORA-03135") ||
+			strings.Contains(errStr, "connection was closed") ||
+			strings.Contains(errStr, "connection lost contact") ||
+			strings.Contains(errStr, "DPI-1080") {
+			return fmt.Errorf("соединение с БД закрыто: %w", err)
+		}
+		return fmt.Errorf("ошибка начала транзакции: %w", err)
+	}
+	defer func() {
+		// Игнорируем ошибку отката, если транзакция уже была закрыта
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			errStr := rollbackErr.Error()
+			if !strings.Contains(errStr, "already been committed or rolled back") &&
+				!strings.Contains(errStr, "connection was closed") &&
+				!strings.Contains(errStr, "ORA-03135") {
+				// Логируем только реальные ошибки отката
+				if logger.Log != nil {
+					logger.Log.Debug("Ошибка отката транзакции (игнорируется)", zap.Error(rollbackErr))
+				}
+			}
+		}
+	}()
+
+	// Выполняем функцию с транзакцией
+	// Reconnect() не может закрыть пул, пока activeOps > 0
+	if err := fn(tx); err != nil {
+		// Проверяем, не является ли это ошибкой закрытого соединения
+		errStr := err.Error()
+		if strings.Contains(errStr, "ORA-03135") ||
+			strings.Contains(errStr, "connection was closed") ||
+			strings.Contains(errStr, "connection lost contact") ||
+			strings.Contains(errStr, "DPI-1080") {
+			return fmt.Errorf("соединение с БД закрыто во время транзакции: %w", err)
+		}
+		return err
+	}
+
+	// Проверяем, не истек ли контекст перед коммитом
+	// Если контекст истек, транзакция уже была откачена, не пытаемся коммитить
+	if txCtx.Err() != nil {
+		// Контекст истек - транзакция уже откачена, это нормально для таймаутов
+		return nil
+	}
+
+	// Коммитим транзакцию
+	if err := tx.Commit(); err != nil {
+		// Проверяем, не была ли транзакция уже откачена
+		if strings.Contains(err.Error(), "already been committed or rolled back") {
+			// Транзакция уже была откачена (например, из-за таймаута) - это нормально
+			return nil
+		}
+		return fmt.Errorf("ошибка коммита транзакции: %w", err)
+	}
+
+	return nil
+}
+
+// GetTestPhone получает тестовый номер телефона из Oracle через процедуру pcsystem.PKG_SMS.GET_TEST_PHONE()
+// Аналог C# метода OracleAdapter.LockGetTestPhone
+// Использует WithDBTx для безопасной работы с транзакцией
+func (d *DBConnection) GetTestPhone() (string, error) {
 	// Проверяем соединение
 	if !d.CheckConnection() {
 		return "", fmt.Errorf("соединение с БД недоступно")
 	}
 
-	// Отмечаем начало операции с БД для предотвращения переподключения во время транзакции
-	d.BeginOperation()
-	defer d.EndOperation()
-
 	// Создаем контекст с таймаутом для транзакции
 	queryCtx, queryCancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer queryCancel()
 
-	// Создаем временный пакет для хранения результата функции
-	// Аналогично queue_reader.go - Oracle требует использования пакетных переменных
-	if err := d.ensureTestPhonePackageExists(queryCtx); err != nil {
-		return "", fmt.Errorf("ошибка создания пакета: %w", err)
-	}
-
-	// Выполняем операции в транзакции для обеспечения атомарности
-	tx, err := d.db.BeginTx(queryCtx, nil)
-	if err != nil {
-		return "", fmt.Errorf("ошибка начала транзакции: %w", err)
-	}
-	defer tx.Rollback() // Откатываем, если что-то пойдет не так
-
-	// Используем PL/SQL блок для вызова функции Oracle и сохранения результата в пакетную переменную
-	// Аналогично queue_reader.go - Oracle требует использования PL/SQL блоков
-	plsql := `
-		BEGIN
-			temp_test_phone_pkg.g_phone_number := pcsystem.PKG_SMS.GET_TEST_PHONE();
-		END;
-	`
-
-	// Выполняем PL/SQL блок
-	_, err = tx.ExecContext(queryCtx, plsql)
-	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
-		if logger.Log != nil {
-			logger.Log.Error("Ошибка выполнения PL/SQL для pcsystem.PKG_SMS.GET_TEST_PHONE()", zap.Error(err))
-		}
-		return "", fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
-	}
-
-	// Получаем результат через функцию-геттер пакета (аналогично queue_reader.go)
-	query := "SELECT temp_test_phone_pkg.get_phone_number() FROM DUAL"
 	var testPhone sql.NullString
-	err = tx.QueryRowContext(queryCtx, query).Scan(&testPhone)
-	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
-		if logger.Log != nil {
-			logger.Log.Error("Ошибка выполнения SELECT для temp_test_phone_pkg.get_phone_number()", zap.Error(err))
-		}
-		return "", fmt.Errorf("ошибка получения тестового номера: %w", err)
-	}
 
-	// Коммитим транзакцию
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("ошибка коммита транзакции: %w", err)
+	// Используем безопасный метод для работы с транзакцией
+	err := d.WithDBTx(queryCtx, func(tx *sql.Tx) error {
+		// Создаем временный пакет для хранения результата функции
+		// Аналогично queue_reader.go - Oracle требует использования пакетных переменных
+		if err := d.ensureTestPhonePackageExistsTx(tx, queryCtx); err != nil {
+			return fmt.Errorf("ошибка создания пакета: %w", err)
+		}
+
+		// Используем PL/SQL блок для вызова функции Oracle и сохранения результата в пакетную переменную
+		// Аналогично queue_reader.go - Oracle требует использования PL/SQL блоков
+		plsql := `
+			BEGIN
+				temp_test_phone_pkg.g_phone_number := pcsystem.PKG_SMS.GET_TEST_PHONE();
+			END;
+		`
+
+		// Выполняем PL/SQL блок
+		_, err := tx.ExecContext(queryCtx, plsql)
+		if err != nil {
+			if logger.Log != nil {
+				logger.Log.Error("Ошибка выполнения PL/SQL для pcsystem.PKG_SMS.GET_TEST_PHONE()", zap.Error(err))
+			}
+			return fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
+		}
+
+		// Получаем результат через функцию-геттер пакета (аналогично queue_reader.go)
+		query := "SELECT temp_test_phone_pkg.get_phone_number() FROM DUAL"
+		err = tx.QueryRowContext(queryCtx, query).Scan(&testPhone)
+		if err != nil {
+			if logger.Log != nil {
+				logger.Log.Error("Ошибка выполнения SELECT для temp_test_phone_pkg.get_phone_number()", zap.Error(err))
+			}
+			return fmt.Errorf("ошибка получения тестового номера: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return "", err
 	}
 
 	// Если тестовый номер пуст (например, значение отсутствует в БД),
@@ -474,9 +573,9 @@ func (d *DBConnection) GetTestPhone() (string, error) {
 	return testPhone.String, nil
 }
 
-// ensureTestPhonePackageExists создает временный пакет Oracle для работы с функцией GET_TEST_PHONE
-// Аналогично queue_reader.go - Oracle требует использования пакетных переменных для передачи данных
-func (d *DBConnection) ensureTestPhonePackageExists(ctx context.Context) error {
+// ensureTestPhonePackageExistsTx создает временный пакет Oracle для работы с функцией GET_TEST_PHONE
+// Использует транзакцию для безопасного создания пакета
+func (d *DBConnection) ensureTestPhonePackageExistsTx(tx *sql.Tx, ctx context.Context) error {
 	// Создаем пакет с переменной и функцией-геттером для доступа к результату
 	createPackageSQL := `
 		CREATE OR REPLACE PACKAGE temp_test_phone_pkg AS
@@ -485,7 +584,7 @@ func (d *DBConnection) ensureTestPhonePackageExists(ctx context.Context) error {
 			FUNCTION get_phone_number RETURN VARCHAR2;
 		END temp_test_phone_pkg;
 	`
-	_, err := d.db.ExecContext(ctx, createPackageSQL)
+	_, err := tx.ExecContext(ctx, createPackageSQL)
 	if err != nil {
 		return fmt.Errorf("не удалось создать пакет temp_test_phone_pkg: %w", err)
 	}
@@ -499,7 +598,7 @@ func (d *DBConnection) ensureTestPhonePackageExists(ctx context.Context) error {
 			END;
 		END temp_test_phone_pkg;
 	`
-	_, err = d.db.ExecContext(ctx, createPackageBodySQL)
+	_, err = tx.ExecContext(ctx, createPackageBodySQL)
 	if err != nil {
 		return fmt.Errorf("не удалось создать тело пакета temp_test_phone_pkg: %w", err)
 	}

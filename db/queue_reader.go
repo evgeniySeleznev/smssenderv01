@@ -63,9 +63,7 @@ func NewQueueReader(dbConn *DBConnection) (*QueueReader, error) {
 // По аналогии с Python: queue.deqmany(settings.query_number)
 // Принимает контекст для возможности отмены операций при graceful shutdown
 func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMessage, error) {
-	qr.mu.Lock()
-	defer qr.mu.Unlock()
-
+	// Проверяем соединение БЕЗ блокировки мьютекса (быстрая проверка)
 	if qr.dbConn.db == nil {
 		return nil, errors.New("соединение с БД не открыто")
 	}
@@ -74,17 +72,24 @@ func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMess
 		count = 1
 	}
 
-	// Один лог о попытке получить N сообщений
+	// Читаем конфигурацию под блокировкой (только для чтения)
+	qr.mu.Lock()
+	queueName := qr.queueName
 	consumerName := qr.consumerName
-	if consumerName == "" {
-		consumerName = "NULL"
+	waitTimeout := qr.waitTimeout
+	qr.mu.Unlock()
+
+	// Логируем после освобождения мьютекса
+	logConsumerName := consumerName
+	if logConsumerName == "" {
+		logConsumerName = "NULL"
 	}
 	if logger.Log != nil {
 		logger.Log.Debug("Попытка извлечения сообщений из очереди",
 			zap.Int("count", count),
-			zap.String("queue", qr.queueName),
-			zap.String("consumer", consumerName),
-			zap.Int("timeout", qr.waitTimeout))
+			zap.String("queue", queueName),
+			zap.String("consumer", logConsumerName),
+			zap.Int("timeout", waitTimeout))
 	}
 
 	// Создаем контекст с таймаутом для операций (объединяем с переданным контекстом)
@@ -117,14 +122,14 @@ func (qr *QueueReader) DequeueMany(ctx context.Context, count int) ([]*QueueMess
 		// Для первого сообщения используем полный timeout, для остальных - минимальный
 		var timeout float64
 		if i == 0 {
-			timeout = float64(qr.waitTimeout)
+			timeout = float64(waitTimeout)
 		} else {
 			// Для последующих сообщений используем минимальный timeout (50 миллисекунд = 0.05 секунды)
 			// чтобы быстро определить, что очередь пуста
 			timeout = 0.05
 		}
 
-		msg, err := qr.dequeueOneMessageWithTimeout(ctx, timeout)
+		msg, err := qr.dequeueOneMessageWithTimeout(ctx, timeout, queueName, consumerName)
 		if err != nil {
 			// Если ошибка связана с отменой контекста, возвращаем частичный результат
 			if ctx.Err() != nil {
@@ -212,7 +217,8 @@ func (qr *QueueReader) ensurePackageExists(ctx context.Context) error {
 // Использует DBMS_AQ.DEQUEUE с XMLType payload, аналогично Python connection.queue()
 // Использует подход с функцией, возвращающей данные через SELECT с XMLSerialize (аналогично Python)
 // Принимает контекст для возможности отмены операций при graceful shutdown
-func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout float64) (*QueueMessage, error) {
+// Принимает queueName и consumerName как параметры, чтобы не блокировать мьютекс на весь метод
+func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout float64, queueName, consumerName string) (*QueueMessage, error) {
 	// Используем подход аналогичный Python:
 	// cursor.execute("SELECT XMLSerialize(DOCUMENT :xml AS CLOB) FROM DUAL", xml=message.payload)
 	// Создаем функцию, которая делает dequeue и возвращает данные через SELECT с XMLSerialize
@@ -272,10 +278,10 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 
 	// Подготавливаем параметр consumer_name
 	var consumerParam interface{}
-	if qr.consumerName == "" {
+	if consumerName == "" {
 		consumerParam = nil // NULL для Oracle
 	} else {
-		consumerParam = strings.TrimSpace(qr.consumerName)
+		consumerParam = strings.TrimSpace(consumerName)
 	}
 
 	// Отмечаем начало операции с БД для предотвращения переподключения во время транзакции
@@ -305,7 +311,7 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 	_, err = tx.ExecContext(txCtx, plsql,
 		timeout,       // :1 - используем переданный timeout
 		consumerParam, // :2
-		qr.queueName,  // :3
+		queueName,     // :3
 	)
 
 	if err != nil {
@@ -336,8 +342,8 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 		if isContextCanceled {
 			if logger.Log != nil {
 				logger.Log.Info("Операция dequeue отменена из-за graceful shutdown",
-					zap.String("consumer", qr.consumerName),
-					zap.String("queue", qr.queueName))
+					zap.String("consumer", consumerName),
+					zap.String("queue", queueName))
 			}
 			return nil, fmt.Errorf("операция отменена: %w", ctx.Err())
 		}
@@ -345,8 +351,8 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 		if logger.Log != nil {
 			logger.Log.Error("Ошибка выполнения PL/SQL для dequeue",
 				zap.Error(err),
-				zap.String("consumer", qr.consumerName),
-				zap.String("queue", qr.queueName),
+				zap.String("consumer", consumerName),
+				zap.String("queue", queueName),
 				zap.Float64("timeout", timeout))
 		}
 		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
