@@ -454,16 +454,38 @@ func runQueueProcessingLoop(
 		gracefulShutdownInProgress := ctx.Err() == context.Canceled
 
 		if err != nil && !gracefulShutdownInProgress {
+			// Проверяем, не является ли это нормальной ситуацией (таймаут для пустой очереди)
+			errStr := err.Error()
+			isTimeoutError := strings.Contains(errStr, "context deadline exceeded") ||
+				strings.Contains(errStr, "операция отменена")
+
+			if isTimeoutError {
+				// Это нормальная ситуация для пустой очереди - не логируем как ошибку
+				// Продолжаем работу
+				continue
+			}
+
 			// Обычная ошибка (не graceful shutdown) - переподключение
 			logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
-			logger.Log.Info("Ошибка соединения, переподключение...")
-			if !sleepWithContext(ctx, 5*time.Second) {
-				return
-			}
-			if err := dbConn.Reconnect(); err != nil {
-				logger.Log.Error("Ошибка переподключения", zap.Error(err))
+
+			// Проверяем соединение перед переподключением
+			if !dbConn.CheckConnection() {
+				logger.Log.Info("Соединение с БД недоступно, переподключение...")
 				if !sleepWithContext(ctx, 5*time.Second) {
 					return
+				}
+				if err := dbConn.Reconnect(); err != nil {
+					logger.Log.Error("Ошибка переподключения", zap.Error(err))
+					if !sleepWithContext(ctx, 5*time.Second) {
+						return
+					}
+					// После неудачного переподключения проверяем соединение еще раз
+					if !dbConn.CheckConnection() {
+						logger.Log.Warn("Соединение с БД все еще недоступно, повторная попытка через 5 секунд")
+						if !sleepWithContext(ctx, 5*time.Second) {
+							return
+						}
+					}
 				}
 			}
 			continue

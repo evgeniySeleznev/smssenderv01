@@ -330,6 +330,17 @@ func (qr *QueueReader) dequeueOneMessageWithTimeout(ctx context.Context, timeout
 				return nil // Возвращаем nil, чтобы сигнализировать пустую очередь
 			}
 
+			// Проверяем, не истек ли таймаут (это нормально для пустой очереди)
+			if strings.Contains(errStr, "context deadline exceeded") {
+				if logger.Log != nil {
+					logger.Log.Debug("Таймаут ожидания сообщений в очереди (очередь пуста)",
+						zap.String("consumer", qr.consumerName),
+						zap.String("queue", qr.queueName),
+						zap.Float64("timeout", timeout))
+				}
+				return nil // Возвращаем nil, чтобы сигнализировать пустую очередь
+			}
+
 			// Если ошибка из-за отмены контекста - это нормально при graceful shutdown
 			if isContextCanceled {
 				if logger.Log != nil {
