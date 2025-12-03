@@ -470,7 +470,11 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 		}
 	}
 
+	// Обновляем время последнего ответа под блокировкой мьютекса
+	a.mu.Lock()
 	a.lastAnswerTime = time.Now()
+	a.mu.Unlock()
+
 	return smsID, nil
 }
 

@@ -164,9 +164,13 @@ func (d *DBConnection) Reconnect() error {
 			}
 			// Финальная проверка
 			activeCount = d.activeOps.Load()
-			if activeCount > 0 && logger.Log != nil {
-				logger.Log.Warn("Переподключение выполняется при наличии активных операций",
-					zap.Int32("activeOps", activeCount))
+			if activeCount > 0 {
+				// Есть активные операции - не переподключаемся, чтобы не потерять данные
+				if logger.Log != nil {
+					logger.Log.Warn("Переподключение отменено: обнаружены активные операции",
+						zap.Int32("activeOps", activeCount))
+				}
+				return fmt.Errorf("нельзя переподключиться: обнаружены активные операции (%d)", activeCount)
 			}
 			break
 		}
@@ -174,7 +178,18 @@ func (d *DBConnection) Reconnect() error {
 
 	// Получаем блокировку для закрытия старого соединения
 	// К этому моменту активные операции должны быть завершены
+	// Финальная проверка под блокировкой для предотвращения гонок
 	d.mu.Lock()
+	// Еще раз проверяем активные операции под блокировкой
+	finalActiveCount := d.activeOps.Load()
+	if finalActiveCount > 0 {
+		d.mu.Unlock()
+		if logger.Log != nil {
+			logger.Log.Warn("Переподключение отменено: обнаружены активные операции под блокировкой",
+				zap.Int32("activeOps", finalActiveCount))
+		}
+		return fmt.Errorf("нельзя переподключиться: обнаружены активные операции (%d)", finalActiveCount)
+	}
 	oldDB := d.db
 	d.db = nil // Сбрасываем соединение под блокировкой
 	d.mu.Unlock()

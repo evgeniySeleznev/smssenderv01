@@ -132,11 +132,19 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context, queueNam
 			FUNCTION get_payload RETURN XMLType;
 		END temp_exception_queue_pkg;
 	`
-	_, err := eqr.dbConn.db.ExecContext(packageCtx, createPackageSQL)
-	if err != nil {
-		if logger.Log != nil {
-			logger.Log.Debug("Не удалось создать пакет (возможно, уже существует)", zap.Error(err))
+
+	// Используем WithDB для безопасной работы с соединением
+	err := eqr.dbConn.WithDB(func(db *sql.DB) error {
+		_, err := db.ExecContext(packageCtx, createPackageSQL)
+		if err != nil {
+			if logger.Log != nil {
+				logger.Log.Debug("Не удалось создать пакет (возможно, уже существует)", zap.Error(err))
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// Создаем тело пакета с реализацией функций
@@ -168,11 +176,19 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context, queueNam
 			END;
 		END temp_exception_queue_pkg;
 	`
-	_, err = eqr.dbConn.db.ExecContext(packageCtx, createPackageBodySQL)
-	if err != nil {
-		if logger.Log != nil {
-			logger.Log.Debug("Не удалось создать тело пакета (возможно, уже существует)", zap.Error(err))
+
+	// Используем WithDB для безопасной работы с соединением
+	err = eqr.dbConn.WithDB(func(db *sql.DB) error {
+		_, execErr := db.ExecContext(packageCtx, createPackageBodySQL)
+		if execErr != nil {
+			if logger.Log != nil {
+				logger.Log.Debug("Не удалось создать тело пакета (возможно, уже существует)", zap.Error(execErr))
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// PL/SQL блок для выполнения dequeue из exception queue
@@ -221,10 +237,6 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context, queueNam
 		END;
 	`
 
-	// Отмечаем начало операции с БД для предотвращения переподключения во время транзакции
-	eqr.dbConn.BeginOperation()
-	defer eqr.dbConn.EndOperation()
-
 	// Создаем контекст с таймаутом для транзакции, объединяя с переданным контекстом
 	// Это позволяет отменить транзакцию при graceful shutdown
 	// Таймаут = waitTimeout + небольшой запас для выполнения операций
@@ -236,152 +248,130 @@ func (eqr *ExceptionQueueReader) dequeueOneMessage(ctx context.Context, queueNam
 	txCtx, txCancel := context.WithTimeout(ctx, txTimeout)
 	defer txCancel()
 
-	// Выполняем операции в транзакции для обеспечения атомарности
-	tx, err := eqr.dbConn.db.BeginTx(txCtx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка начала транзакции: %w", err)
-	}
-	defer tx.Rollback() // Откатываем, если что-то пойдет не так
+	// Переменные для результата dequeue
+	var msgidStr, xmlString string
+	var dequeueSuccess bool
 
-	// Выполняем PL/SQL блок для dequeue (без consumer_name)
-	_, err = tx.ExecContext(txCtx, plsql,
-		waitTimeout, // :1
-		queueName,   // :2
-	)
+	// Используем WithDBTx для безопасной работы с транзакцией
+	// Это предотвращает переподключение во время транзакции
+	err = eqr.dbConn.WithDBTx(txCtx, func(tx *sql.Tx) error {
+		// Выполняем PL/SQL блок для dequeue (без consumer_name)
+		_, execErr := tx.ExecContext(txCtx, plsql,
+			waitTimeout, // :1
+			queueName,   // :2
+		)
 
-	if err != nil {
-		// Проверяем, была ли ошибка из-за отмены контекста (graceful shutdown)
-		isContextCanceled := ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled
-
-		// Откатываем транзакцию при ошибке (если она еще не откачена)
-		if !isContextCanceled {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-				// Игнорируем ошибку "transaction has already been committed or rolled back"
-				if !strings.Contains(rollbackErr.Error(), "already been committed or rolled back") {
-					logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
+		if execErr != nil {
+			// Проверяем, не пуста ли очередь
+			errStr := execErr.Error()
+			if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
+				if logger.Log != nil {
+					logger.Log.Debug("Exception queue пуста (код ошибки 25228)")
 				}
+				dequeueSuccess = false
+				return nil // Возвращаем nil, чтобы WithDBTx не откатил транзакцию (она уже пуста)
 			}
-		}
 
-		// Проверяем, не пуста ли очередь
-		errStr := err.Error()
-		if strings.Contains(errStr, "25228") || strings.Contains(errStr, "-25228") {
+			// Если ошибка из-за отмены контекста - это нормально при graceful shutdown
+			if ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled {
+				if logger.Log != nil {
+					logger.Log.Info("Операция dequeue из exception queue отменена из-за graceful shutdown",
+						zap.String("queue", queueName))
+				}
+				return fmt.Errorf("операция отменена: %w", ctx.Err())
+			}
+
 			if logger.Log != nil {
-				logger.Log.Debug("Exception queue пуста (код ошибки 25228)")
+				logger.Log.Error("Ошибка выполнения PL/SQL для dequeue из exception queue",
+					zap.Error(execErr),
+					zap.String("queue", queueName),
+					zap.Int("timeout", waitTimeout))
 			}
-			return nil, nil
+			return fmt.Errorf("ошибка выполнения PL/SQL: %w", execErr)
 		}
 
-		// Если ошибка из-за отмены контекста - это нормально при graceful shutdown
-		if isContextCanceled {
+		// Проверяем успешность dequeue через функции пакета
+		checkSuccessSQL := `SELECT temp_exception_queue_pkg.get_success(), temp_exception_queue_pkg.get_error_code(), temp_exception_queue_pkg.get_error_msg() FROM DUAL`
+		var successFlag, errorCode sql.NullInt64
+		var errorMsg sql.NullString
+		queryErr := tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
+		if queryErr != nil {
+			// Проверяем, была ли ошибка из-за отмены контекста
+			if ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled {
+				if logger.Log != nil {
+					logger.Log.Info("Проверка результата dequeue из exception queue отменена из-за graceful shutdown")
+				}
+				return fmt.Errorf("операция отменена: %w", ctx.Err())
+			}
+			return fmt.Errorf("ошибка проверки результата dequeue: %w", queryErr)
+		}
+
+		// Если dequeue не удался (очередь пуста)
+		if !successFlag.Valid || successFlag.Int64 == 0 {
+			if errorCode.Valid && errorCode.Int64 == -25228 {
+				dequeueSuccess = false
+				return nil // Очередь пуста - это нормально
+			}
+			errText := "неизвестная ошибка"
+			if errorMsg.Valid && errorMsg.String != "" {
+				errText = errorMsg.String
+			}
+			return fmt.Errorf("ошибка Oracle (код %d): %s", errorCode.Int64, errText)
+		}
+
+		dequeueSuccess = true
+
+		// Используем XMLSerialize для получения CLOB из XMLType
+		query := `SELECT RAWTOHEX(temp_exception_queue_pkg.get_msgid()) as msgid, 
+		             XMLSerialize(DOCUMENT temp_exception_queue_pkg.get_payload() AS CLOB) as payload 
+		          FROM DUAL`
+
+		rows, err := tx.QueryContext(txCtx, query)
+		if err != nil {
+			if logger.Log != nil {
+				logger.Log.Error("Ошибка выполнения SELECT с XMLSerialize", zap.Error(err))
+			}
+			return fmt.Errorf("ошибка выполнения SELECT с XMLSerialize: %w", err)
+		}
+		defer rows.Close()
+
+		if !rows.Next() {
+			return nil // Нет данных
+		}
+
+		var msgid, payload sql.NullString
+		if err := rows.Scan(&msgid, &payload); err != nil {
+			return fmt.Errorf("ошибка чтения данных: %w", err)
+		}
+
+		if !payload.Valid || payload.String == "" {
+			return nil // Нет данных
+		}
+
+		xmlString = payload.String
+
+		if msgid.Valid {
+			msgidStr = msgid.String
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		// Проверяем, была ли ошибка из-за отмены контекста
+		if ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled {
 			if logger.Log != nil {
 				logger.Log.Info("Операция dequeue из exception queue отменена из-за graceful shutdown",
 					zap.String("queue", queueName))
 			}
 			return nil, fmt.Errorf("операция отменена: %w", ctx.Err())
 		}
-
-		if logger.Log != nil {
-			logger.Log.Error("Ошибка выполнения PL/SQL для dequeue из exception queue",
-				zap.Error(err),
-				zap.String("queue", queueName),
-				zap.Int("timeout", waitTimeout))
-		}
-		return nil, fmt.Errorf("ошибка выполнения PL/SQL: %w", err)
+		return nil, err
 	}
 
-	// Проверяем успешность dequeue через функции пакета
-	checkSuccessSQL := `SELECT temp_exception_queue_pkg.get_success(), temp_exception_queue_pkg.get_error_code(), temp_exception_queue_pkg.get_error_msg() FROM DUAL`
-	var successFlag, errorCode sql.NullInt64
-	var errorMsg sql.NullString
-	err = tx.QueryRowContext(txCtx, checkSuccessSQL).Scan(&successFlag, &errorCode, &errorMsg)
-	if err != nil {
-		// Проверяем, была ли ошибка из-за отмены контекста
-		isContextCanceled := ctx.Err() == context.Canceled || txCtx.Err() == context.Canceled
-
-		if !isContextCanceled {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-				// Игнорируем ошибку "transaction has already been committed or rolled back"
-				if !strings.Contains(rollbackErr.Error(), "already been committed or rolled back") {
-					logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-				}
-			}
-		}
-
-		if isContextCanceled {
-			if logger.Log != nil {
-				logger.Log.Info("Проверка результата dequeue из exception queue отменена из-за graceful shutdown")
-			}
-			return nil, fmt.Errorf("операция отменена: %w", ctx.Err())
-		}
-
-		return nil, fmt.Errorf("ошибка проверки результата dequeue: %w", err)
-	}
-
-	// Если dequeue не удался (очередь пуста)
-	if !successFlag.Valid || successFlag.Int64 == 0 {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
-		if errorCode.Valid && errorCode.Int64 == -25228 {
-			return nil, nil // Очередь пуста
-		}
-		errText := "неизвестная ошибка"
-		if errorMsg.Valid && errorMsg.String != "" {
-			errText = errorMsg.String
-		}
-		return nil, fmt.Errorf("ошибка Oracle (код %d): %s", errorCode.Int64, errText)
-	}
-
-	// Используем XMLSerialize для получения CLOB из XMLType
-	query := `SELECT RAWTOHEX(temp_exception_queue_pkg.get_msgid()) as msgid, 
-	             XMLSerialize(DOCUMENT temp_exception_queue_pkg.get_payload() AS CLOB) as payload 
-	          FROM DUAL`
-
-	rows, err := tx.QueryContext(txCtx, query)
-	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
-		if logger.Log != nil {
-			logger.Log.Error("Ошибка выполнения SELECT с XMLSerialize", zap.Error(err))
-		}
-		return nil, fmt.Errorf("ошибка выполнения SELECT с XMLSerialize: %w", err)
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
+	// Если очередь пуста, возвращаем nil
+	if !dequeueSuccess {
 		return nil, nil
-	}
-
-	var msgid, payload sql.NullString
-	if err := rows.Scan(&msgid, &payload); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
-		return nil, fmt.Errorf("ошибка чтения данных: %w", err)
-	}
-
-	if !payload.Valid || payload.String == "" {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && logger.Log != nil {
-			logger.Log.Error("Ошибка отката транзакции", zap.Error(rollbackErr))
-		}
-		return nil, nil
-	}
-
-	xmlString := payload.String
-
-	msgidStr := ""
-	if msgid.Valid {
-		msgidStr = msgid.String
-	}
-
-	// Коммитим транзакцию только после успешного чтения данных
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("ошибка коммита транзакции: %w", err)
 	}
 
 	msg := &QueueMessage{
