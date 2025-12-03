@@ -27,17 +27,19 @@ const (
 
 // DBConnection — аналог Python-класса, инкапсулирует соединение и операции с БД.
 type DBConnection struct {
-	cfg               *ini.File
-	db                *sql.DB
-	ctx               context.Context
-	cancel            context.CancelFunc
-	mu                sync.RWMutex // Блокировка для потокобезопасного доступа к БД (RWMutex для параллельного чтения)
-	reconnectTicker   *time.Ticker
-	reconnectStop     chan struct{}
-	reconnectWg       sync.WaitGroup
-	lastReconnect     time.Time
-	reconnectInterval time.Duration // Интервал переподключения (30 минут)
-	activeOps         atomic.Int32  // Счетчик активных операций с БД
+	cfg                       *ini.File
+	db                        *sql.DB
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	mu                        sync.RWMutex // Блокировка для потокобезопасного доступа к БД (RWMutex для параллельного чтения)
+	reconnectTicker           *time.Ticker
+	reconnectStop             chan struct{}
+	reconnectWg               sync.WaitGroup
+	lastReconnect             time.Time
+	reconnectInterval         time.Duration // Интервал переподключения (30 минут)
+	activeOps                 atomic.Int32  // Счетчик активных операций с БД
+	consecutiveReconnectFails atomic.Int32  // Счетчик последовательных неудачных попыток переподключения
+	reconnecting              atomic.Bool   // Флаг переподключения (блокирует новые операции)
 }
 
 // NewDBConnection загружает конфигурацию из settings/settings.ini.
@@ -61,7 +63,7 @@ func NewDBConnection() (*DBConnection, error) {
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		reconnectInterval: 2 * time.Minute, // 30 минут по умолчанию
+		reconnectInterval: 70 * time.Second, // 30 минут по умолчанию
 		reconnectStop:     make(chan struct{}),
 		lastReconnect:     time.Now(),
 	}, nil
@@ -124,56 +126,47 @@ func (d *DBConnection) CheckConnection() bool {
 // Reconnect переподключается к базе данных с пересозданием пула соединений
 // Проверяет наличие активных операций перед переподключением
 // Использует безопасную блокировку без гонок
+// Стратегия: ждем завершения операций (макс 35 сек), если таймаут - проверяем необходимость принудительного переподключения
 func (d *DBConnection) Reconnect() error {
-	// Первая проверка: ждем завершения активных операций БЕЗ блокировки
+	// Проверяем необходимость принудительного переподключения
+	// Если много неудачных попыток подряд
+	const maxConsecutiveFailures = 3 // Максимум последовательных неудачных попыток
+
+	consecutiveFails := d.consecutiveReconnectFails.Load()
+	forceReconnect := consecutiveFails >= maxConsecutiveFailures
+
+	// Устанавливаем флаг переподключения для блокировки новых операций
+	d.reconnecting.Store(true)
+	defer d.reconnecting.Store(false) // Снимаем флаг в любом случае (успех или ошибка)
+
+	// Ждем завершения активных операций БЕЗ блокировки
 	// Это позволяет операциям завершиться естественным образом
+	// Максимальное время ожидания - 35 секунд (больше чем execTimeout = 30 секунд)
 	if err := d.waitForActiveOperations(); err != nil {
-		return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
-	}
-
-	// Блокируем доступ к пулу для предотвращения новых операций
-	// Используем цикл с проверкой для предотвращения гонок
-	const maxRetries = 3
-	const retryDelay = 50 * time.Millisecond
-
-	// Пытаемся получить блокировку с проверкой активных операций
-	for retry := 0; retry < maxRetries; retry++ {
-		// Проверяем активные операции БЕЗ блокировки (быстрая проверка)
-		activeCount := d.activeOps.Load()
-		if activeCount == 0 {
-			// Нет активных операций - получаем блокировку и переподключаемся
-			break
-		}
-
-		if retry < maxRetries-1 {
+		// Таймаут или ошибка - проверяем необходимость принудительного переподключения
+		if forceReconnect {
+			// Принудительное переподключение - игнорируем активные операции
+			// Это защита от навсегда зависших операций
 			if logger.Log != nil {
-				logger.Log.Debug("Обнаружены активные операции, ожидание",
-					zap.Int32("activeOps", activeCount),
-					zap.Int("retry", retry+1),
-					zap.Int("maxRetries", maxRetries))
+				logger.Log.Warn("Принудительное переподключение: активные операции игнорируются",
+					zap.Error(err),
+					zap.Int32("consecutiveFails", consecutiveFails))
 			}
-			time.Sleep(retryDelay)
+			// Продолжаем переподключение несмотря на активные операции
 		} else {
-			// Последняя попытка - ждем завершения операций
+			// Обычная отмена переподключения
+			// Для периодического переподключения это нормально - попробуем в следующий раз
+			d.consecutiveReconnectFails.Add(1)
 			if logger.Log != nil {
-				logger.Log.Debug("Последняя попытка: ожидание завершения активных операций",
-					zap.Int32("activeOps", activeCount))
+				logger.Log.Warn("Переподключение отменено: активные операции не завершились",
+					zap.Error(err),
+					zap.Int32("consecutiveFails", d.consecutiveReconnectFails.Load()))
 			}
-			if err := d.waitForActiveOperations(); err != nil {
-				return fmt.Errorf("не удалось дождаться завершения активных операций: %w", err)
-			}
-			// Финальная проверка
-			activeCount = d.activeOps.Load()
-			if activeCount > 0 {
-				// Есть активные операции - не переподключаемся, чтобы не потерять данные
-				if logger.Log != nil {
-					logger.Log.Warn("Переподключение отменено: обнаружены активные операции",
-						zap.Int32("activeOps", activeCount))
-				}
-				return fmt.Errorf("нельзя переподключиться: обнаружены активные операции (%d)", activeCount)
-			}
-			break
+			return fmt.Errorf("переподключение отменено: %w", err)
 		}
+	} else {
+		// Операции завершились успешно - сбрасываем счетчик неудач
+		d.consecutiveReconnectFails.Store(0)
 	}
 
 	if logger.Log != nil {
@@ -199,13 +192,14 @@ func (d *DBConnection) Reconnect() error {
 	}()
 
 	// Получаем блокировку для атомарной замены соединения
-	// К этому моменту активные операции должны быть завершены
+	// К этому моменту активные операции должны быть завершены (если не принудительное переподключение)
 	// Финальная проверка под блокировкой для предотвращения гонок
 	d.mu.Lock()
 	// Еще раз проверяем активные операции под блокировкой
 	finalActiveCount := d.activeOps.Load()
-	if finalActiveCount > 0 {
-		// Есть активные операции - закрываем новое соединение и отменяем переподключение
+	if finalActiveCount > 0 && !forceReconnect {
+		// Есть активные операции и это не принудительное переподключение
+		// Закрываем новое соединение и отменяем переподключение
 		d.mu.Unlock()
 		newDBClosed = true
 		_ = newDB.Close()
@@ -215,10 +209,18 @@ func (d *DBConnection) Reconnect() error {
 		}
 		return fmt.Errorf("нельзя переподключиться: обнаружены активные операции (%d)", finalActiveCount)
 	}
+	if finalActiveCount > 0 && forceReconnect {
+		// Принудительное переподключение - игнорируем активные операции
+		if logger.Log != nil {
+			logger.Log.Warn("Принудительное переподключение: игнорируем активные операции под блокировкой",
+				zap.Int32("activeOps", finalActiveCount))
+		}
+	}
 	oldDB := d.db
 	d.db = newDB // Атомарно заменяем старое соединение на новое
 	d.lastReconnect = time.Now()
-	newDBClosed = true // Новое соединение теперь в d.db, не закрываем его в defer
+	d.consecutiveReconnectFails.Store(0) // Сбрасываем счетчик неудач при успешном переподключении
+	newDBClosed = true                   // Новое соединение теперь в d.db, не закрываем его в defer
 	d.mu.Unlock()
 
 	// Закрываем старое соединение БЕЗ блокировки мьютекса
@@ -241,7 +243,8 @@ func (d *DBConnection) Reconnect() error {
 }
 
 // waitForActiveOperations ждет завершения активных операций перед переподключением
-// Максимальное время ожидания - 35 секунд
+// Максимальное время ожидания - 35 секунд (больше чем execTimeout = 30 секунд)
+// Возвращает ошибку, если таймаут истек и операции все еще активны
 func (d *DBConnection) waitForActiveOperations() error {
 	const maxWaitTime = 35 * time.Second
 	const checkInterval = 100 * time.Millisecond
@@ -261,10 +264,11 @@ func (d *DBConnection) waitForActiveOperations() error {
 		if time.Since(startTime) > maxWaitTime {
 			if logger.Log != nil {
 				logger.Log.Warn("Превышено время ожидания завершения активных операций",
-					zap.Int32("activeOps", activeCount))
+					zap.Int32("activeOps", activeCount),
+					zap.Duration("waited", time.Since(startTime)))
 			}
-			// Продолжаем переподключение, но логируем предупреждение
-			return nil
+			// Возвращаем ошибку - операции все еще активны после таймаута
+			return fmt.Errorf("timeout waiting for active operations: %d operations still running", activeCount)
 		}
 
 		// Логируем только если прошло более 1 секунды с последнего логирования
@@ -273,7 +277,8 @@ func (d *DBConnection) waitForActiveOperations() error {
 		if now.Sub(lastLogTime) >= logInterval || activeCount != lastActiveCount {
 			if logger.Log != nil {
 				logger.Log.Debug("Ожидание завершения активных операций перед переподключением",
-					zap.Int32("activeOps", activeCount))
+					zap.Int32("activeOps", activeCount),
+					zap.Duration("elapsed", time.Since(startTime)))
 			}
 			lastLogTime = now
 			lastActiveCount = activeCount
@@ -459,7 +464,13 @@ func (d *DBConnection) GetConfig() *ini.File {
 // WithDB выполняет функцию с безопасным доступом к соединению БД
 // Гарантирует, что соединение не будет закрыто во время выполнения функции
 // Использует RWMutex для параллельного чтения
+// Блокирует выполнение во время переподключения
 func (d *DBConnection) WithDB(fn func(*sql.DB) error) error {
+	// Проверяем, не идет ли переподключение
+	if d.reconnecting.Load() {
+		return fmt.Errorf("операция заблокирована: идет переподключение к БД")
+	}
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -473,7 +484,13 @@ func (d *DBConnection) WithDB(fn func(*sql.DB) error) error {
 // WithDBTx выполняет функцию с транзакцией и безопасным доступом к соединению
 // Гарантирует, что соединение не будет закрыто во время транзакции
 // Отмечает начало операции с БД для предотвращения переподключения во время транзакции
+// Блокирует выполнение во время переподключения
 func (d *DBConnection) WithDBTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	// Проверяем, не идет ли переподключение
+	if d.reconnecting.Load() {
+		return fmt.Errorf("операция заблокирована: идет переподключение к БД")
+	}
+
 	// Отмечаем начало операции ПОД блокировкой
 	d.mu.Lock()
 	if d.db == nil {
