@@ -96,6 +96,7 @@ func main() {
 	}
 
 	// Устанавливаем callback для сохранения результатов отложенных SMS в БД
+	// С retry-механизмом для обработки временных ошибок (блокировка при переподключении и т.д.)
 	smsService.SetSaveCallback(func(response *sms.SMSResponse) {
 		if response == nil {
 			return
@@ -107,18 +108,61 @@ func main() {
 			ResponseDate: response.SentAt,
 			ErrorText:    response.ErrorText,
 		}
-		if success, err := dbConn.SaveSmsResponse(context.Background(), saveParams); !success {
+
+		const maxRetries = 3
+		const retryDelay = 20 * time.Second
+
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			success, err := dbConn.SaveSmsResponse(context.Background(), saveParams)
+			if success {
+				// Успешно сохранено
+				if attempt > 0 {
+					logger.Log.Info("Результат SMS успешно сохранен после повторной попытки",
+						zap.Int64("taskID", response.TaskID),
+						zap.String("messageID", response.MessageID),
+						zap.Int("attempt", attempt+1))
+				}
+				return
+			}
+
+			lastErr = err
 			if err != nil {
-				// Обрабатываем ошибки соединения с БД (может быть закрыто при shutdown)
-				// Это может произойти, если горутина проверки статуса проснулась после закрытия соединения
-				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД (возможно, соединение закрыто при shutdown)",
+				// Проверяем, стоит ли повторять попытку
+				errStr := err.Error()
+				shouldRetry := strings.Contains(errStr, "операция заблокирована") ||
+					strings.Contains(errStr, "соединение с БД") ||
+					strings.Contains(errStr, "connection was closed") ||
+					strings.Contains(errStr, "ORA-03135")
+
+				if shouldRetry && attempt < maxRetries-1 {
+					// Повторяем попытку после задержки
+					logger.Log.Warn("Ошибка сохранения результата SMS, повторная попытка",
+						zap.Int64("taskID", response.TaskID),
+						zap.String("messageID", response.MessageID),
+						zap.Int("attempt", attempt+1),
+						zap.Int("maxRetries", maxRetries),
+						zap.Duration("retryDelay", retryDelay),
+						zap.Error(err))
+					time.Sleep(retryDelay)
+					continue
+				}
+			}
+
+			// Последняя попытка или ошибка, которую не стоит повторять
+			if attempt == maxRetries-1 {
+				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД после всех попыток",
+					zap.Int64("taskID", response.TaskID),
+					zap.String("messageID", response.MessageID),
+					zap.Int("attempts", maxRetries),
+					zap.Error(lastErr))
+			} else {
+				logger.Log.Error("Ошибка сохранения результата отложенного SMS в БД (не повторяемая)",
 					zap.Int64("taskID", response.TaskID),
 					zap.String("messageID", response.MessageID),
 					zap.Error(err))
 			}
-		} else {
-			logger.Log.Debug("Результат отложенного SMS сохранен в БД",
-				zap.Int64("taskID", response.TaskID))
+			return
 		}
 	})
 
