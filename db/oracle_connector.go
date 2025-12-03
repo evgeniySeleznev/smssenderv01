@@ -61,7 +61,7 @@ func NewDBConnection() (*DBConnection, error) {
 		cfg:               cfg,
 		ctx:               ctx,
 		cancel:            cancel,
-		reconnectInterval: 30 * time.Minute, // 30 минут по умолчанию
+		reconnectInterval: 2 * time.Minute, // 30 минут по умолчанию
 		reconnectStop:     make(chan struct{}),
 		lastReconnect:     time.Now(),
 	}, nil
@@ -176,14 +176,39 @@ func (d *DBConnection) Reconnect() error {
 		}
 	}
 
-	// Получаем блокировку для закрытия старого соединения
+	if logger.Log != nil {
+		logger.Log.Info("Начало переподключения к базе данных...")
+	}
+
+	// Создаем новое соединение БЕЗ блокировки мьютекса
+	// (сетевые операции могут занять время)
+	// Старое соединение остается доступным во время создания нового
+	// Это предотвращает ошибки "соединение с БД не открыто" во время переподключения
+	newDB, err := d.createNewConnection()
+	if err != nil {
+		return fmt.Errorf("ошибка создания нового соединения: %w", err)
+	}
+
+	// Используем defer для гарантированного закрытия нового соединения в случае ошибки
+	// Это предотвращает утечку памяти, если переподключение не удастся
+	newDBClosed := false
+	defer func() {
+		if !newDBClosed && newDB != nil {
+			_ = newDB.Close()
+		}
+	}()
+
+	// Получаем блокировку для атомарной замены соединения
 	// К этому моменту активные операции должны быть завершены
 	// Финальная проверка под блокировкой для предотвращения гонок
 	d.mu.Lock()
 	// Еще раз проверяем активные операции под блокировкой
 	finalActiveCount := d.activeOps.Load()
 	if finalActiveCount > 0 {
+		// Есть активные операции - закрываем новое соединение и отменяем переподключение
 		d.mu.Unlock()
+		newDBClosed = true
+		_ = newDB.Close()
 		if logger.Log != nil {
 			logger.Log.Warn("Переподключение отменено: обнаружены активные операции под блокировкой",
 				zap.Int32("activeOps", finalActiveCount))
@@ -191,28 +216,23 @@ func (d *DBConnection) Reconnect() error {
 		return fmt.Errorf("нельзя переподключиться: обнаружены активные операции (%d)", finalActiveCount)
 	}
 	oldDB := d.db
-	d.db = nil // Сбрасываем соединение под блокировкой
+	d.db = newDB // Атомарно заменяем старое соединение на новое
+	d.lastReconnect = time.Now()
+	newDBClosed = true // Новое соединение теперь в d.db, не закрываем его в defer
 	d.mu.Unlock()
 
-	// Закрываем текущий пул соединений БЕЗ блокировки мьютекса
+	// Закрываем старое соединение БЕЗ блокировки мьютекса
 	// (операция закрытия может занять время)
-	if oldDB != nil {
-		_ = oldDB.Close()
-		if logger.Log != nil {
-			logger.Log.Debug("Текущий пул соединений закрыт")
+	// Используем defer для гарантированного закрытия старого соединения
+	// Это предотвращает утечку памяти даже при панике
+	defer func() {
+		if oldDB != nil {
+			_ = oldDB.Close()
+			if logger.Log != nil {
+				logger.Log.Debug("Старый пул соединений закрыт")
+			}
 		}
-	}
-
-	if logger.Log != nil {
-		logger.Log.Info("Начало переподключения к базе данных...")
-	}
-
-	// Пересоздаем подключение БЕЗ блокировки мьютекса
-	// (сетевые операции могут занять время)
-	// openConnectionInternal устанавливает соединение под блокировкой мьютекса
-	if err := d.openConnectionInternal(); err != nil {
-		return fmt.Errorf("ошибка переподключения: %w", err)
-	}
+	}()
 
 	if logger.Log != nil {
 		logger.Log.Info("Переподключение к базе данных выполнено успешно. Пул соединений пересоздан")
@@ -283,8 +303,9 @@ func (d *DBConnection) RecreatePool() error {
 	return d.Reconnect()
 }
 
-// openConnectionInternal внутренний метод открытия соединения без блокировки
-func (d *DBConnection) openConnectionInternal() error {
+// createNewConnection создает новое соединение без установки его в d.db
+// Используется для переподключения, чтобы избежать окна недоступности соединения
+func (d *DBConnection) createNewConnection() (*sql.DB, error) {
 	sec := d.cfg.Section("main")
 
 	user := sec.Key("username").String()
@@ -302,7 +323,7 @@ func (d *DBConnection) openConnectionInternal() error {
 		if logger.Log != nil {
 			logger.Log.Error("Ошибка sql.Open", zap.Error(err))
 		}
-		return fmt.Errorf("ошибка sql.Open: %w", err)
+		return nil, fmt.Errorf("ошибка sql.Open: %w", err)
 	}
 
 	// Настройки пула согласно требованиям:
@@ -334,7 +355,18 @@ func (d *DBConnection) openConnectionInternal() error {
 				logger.Log.Error("Ошибка ping", zap.Error(err))
 			}
 		}
-		return fmt.Errorf("ошибка ping: %w", err)
+		return nil, fmt.Errorf("ошибка ping: %w", err)
+	}
+
+	return db, nil
+}
+
+// openConnectionInternal внутренний метод открытия соединения без блокировки
+// Устанавливает соединение в d.db под блокировкой мьютекса
+func (d *DBConnection) openConnectionInternal() error {
+	db, err := d.createNewConnection()
+	if err != nil {
+		return err
 	}
 
 	// Устанавливаем соединение под блокировкой мьютекса
