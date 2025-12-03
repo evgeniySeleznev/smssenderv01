@@ -465,26 +465,58 @@ func runQueueProcessingLoop(
 				continue
 			}
 
-			// Обычная ошибка (не graceful shutdown) - переподключение
-			logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
+			// Проверяем, не является ли это ошибкой закрытого соединения
+			isConnectionClosedError := strings.Contains(errStr, "ORA-03135") ||
+				strings.Contains(errStr, "connection was closed") ||
+				strings.Contains(errStr, "connection lost contact") ||
+				strings.Contains(errStr, "DPI-1080") ||
+				strings.Contains(errStr, "соединение с БД не открыто")
 
+			if isConnectionClosedError {
+				// Соединение было закрыто - нужно переподключиться
+				logger.Log.Warn("Обнаружено закрытое соединение с БД, переподключение...", zap.Error(err))
+			} else {
+				// Обычная ошибка (не graceful shutdown) - переподключение
+				logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
+			}
+
+			// Переподключаемся при любой ошибке (кроме таймаута)
 			// Проверяем соединение перед переподключением
-			if !dbConn.CheckConnection() {
-				logger.Log.Info("Соединение с БД недоступно, переподключение...")
+			if !dbConn.CheckConnection() || isConnectionClosedError {
+				if !isConnectionClosedError {
+					logger.Log.Info("Соединение с БД недоступно, переподключение...")
+				}
 				if !sleepWithContext(ctx, 5*time.Second) {
 					return
 				}
 				if err := dbConn.Reconnect(); err != nil {
-					logger.Log.Error("Ошибка переподключения", zap.Error(err))
+					// Проверяем, не является ли это временной проблемой с сетью
+					errStr := err.Error()
+					isNetworkError := strings.Contains(errStr, "context deadline exceeded") ||
+						strings.Contains(errStr, "timeout") ||
+						strings.Contains(errStr, "ORA-12170") ||
+						strings.Contains(errStr, "ORA-12545")
+
+					if isNetworkError {
+						logger.Log.Warn("Временная проблема с сетью при переподключении, повторная попытка через 5 секунд", zap.Error(err))
+					} else {
+						logger.Log.Error("Ошибка переподключения", zap.Error(err))
+					}
+
 					if !sleepWithContext(ctx, 5*time.Second) {
 						return
 					}
 					// После неудачного переподключения проверяем соединение еще раз
 					if !dbConn.CheckConnection() {
-						logger.Log.Warn("Соединение с БД все еще недоступно, повторная попытка через 5 секунд")
-						if !sleepWithContext(ctx, 5*time.Second) {
-							return
-						}
+						logger.Log.Warn("Соединение с БД все еще недоступно, пропускаем итерацию")
+						// Пропускаем итерацию, чтобы не пытаться использовать БД без соединения
+						continue
+					}
+				} else {
+					// Переподключение успешно, проверяем соединение
+					if !dbConn.CheckConnection() {
+						logger.Log.Warn("Переподключение выполнено, но соединение недоступно, пропускаем итерацию")
+						continue
 					}
 				}
 			}

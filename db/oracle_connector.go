@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -297,8 +298,19 @@ func (d *DBConnection) openConnectionInternal() error {
 	defer pingCancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
+		// Проверяем, не является ли это временной проблемой с сетью
+		errStr := err.Error()
+		isNetworkError := strings.Contains(errStr, "context deadline exceeded") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "ORA-12170") ||
+			strings.Contains(errStr, "ORA-12545")
+
 		if logger.Log != nil {
-			logger.Log.Error("Ошибка ping", zap.Error(err))
+			if isNetworkError {
+				logger.Log.Debug("Временная проблема с сетью при проверке соединения", zap.Error(err))
+			} else {
+				logger.Log.Error("Ошибка ping", zap.Error(err))
+			}
 		}
 		return fmt.Errorf("ошибка ping: %w", err)
 	}
@@ -428,18 +440,59 @@ func (d *DBConnection) WithDBTx(ctx context.Context, fn func(*sql.Tx) error) err
 
 	tx, err := db.BeginTx(txCtx, nil)
 	if err != nil {
+		// Проверяем, не является ли это ошибкой закрытого соединения
+		errStr := err.Error()
+		if strings.Contains(errStr, "ORA-03135") ||
+			strings.Contains(errStr, "connection was closed") ||
+			strings.Contains(errStr, "connection lost contact") ||
+			strings.Contains(errStr, "DPI-1080") {
+			return fmt.Errorf("соединение с БД закрыто: %w", err)
+		}
 		return fmt.Errorf("ошибка начала транзакции: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		// Игнорируем ошибку отката, если транзакция уже была закрыта
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			errStr := rollbackErr.Error()
+			if !strings.Contains(errStr, "already been committed or rolled back") &&
+				!strings.Contains(errStr, "connection was closed") &&
+				!strings.Contains(errStr, "ORA-03135") {
+				// Логируем только реальные ошибки отката
+				if logger.Log != nil {
+					logger.Log.Debug("Ошибка отката транзакции (игнорируется)", zap.Error(rollbackErr))
+				}
+			}
+		}
+	}()
 
 	// Выполняем функцию с транзакцией
 	// Reconnect() не может закрыть пул, пока activeOps > 0
 	if err := fn(tx); err != nil {
+		// Проверяем, не является ли это ошибкой закрытого соединения
+		errStr := err.Error()
+		if strings.Contains(errStr, "ORA-03135") ||
+			strings.Contains(errStr, "connection was closed") ||
+			strings.Contains(errStr, "connection lost contact") ||
+			strings.Contains(errStr, "DPI-1080") {
+			return fmt.Errorf("соединение с БД закрыто во время транзакции: %w", err)
+		}
 		return err
+	}
+
+	// Проверяем, не истек ли контекст перед коммитом
+	// Если контекст истек, транзакция уже была откачена, не пытаемся коммитить
+	if txCtx.Err() != nil {
+		// Контекст истек - транзакция уже откачена, это нормально для таймаутов
+		return nil
 	}
 
 	// Коммитим транзакцию
 	if err := tx.Commit(); err != nil {
+		// Проверяем, не была ли транзакция уже откачена
+		if strings.Contains(err.Error(), "already been committed or rolled back") {
+			// Транзакция уже была откачена (например, из-за таймаута) - это нормально
+			return nil
+		}
 		return fmt.Errorf("ошибка коммита транзакции: %w", err)
 	}
 
