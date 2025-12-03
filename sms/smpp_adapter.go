@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fiorix/go-smpp/smpp"
@@ -32,15 +31,13 @@ const (
 type SMPPAdapter struct {
 	client              *smpp.Transceiver
 	config              *SMPPConfig
-	mu                  sync.RWMutex // RWMutex для параллельного чтения
+	mu                  sync.Mutex
 	lastAnswerTime      time.Time
 	statusChan          <-chan smpp.ConnStatus
-	isConnected         bool         // Флаг подключения
-	lastBindAttempt     time.Time    // Время последней попытки Bind
-	consecutiveFailures int          // Количество последовательных неудачных попыток
-	lastRebindLogTime   time.Time    // Время последнего логирования перед rebind
-	activeSends         atomic.Int32 // Счетчик активных операций отправки
-	rebindInProgress    atomic.Bool  // Флаг переподключения в процессе
+	isConnected         bool      // Флаг подключения
+	lastBindAttempt     time.Time // Время последней попытки Bind
+	consecutiveFailures int       // Количество последовательных неудачных попыток
+	lastRebindLogTime   time.Time // Время последнего логирования перед rebind
 }
 
 // NewSMPPAdapter создает новый SMPP адаптер
@@ -281,117 +278,9 @@ func (a *SMPPAdapter) Unbind() {
 
 // IsConnected проверяет, подключен ли клиент
 func (a *SMPPAdapter) IsConnected() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.isConnected && a.client != nil
-}
-
-// BeginSend отмечает начало операции отправки SMS
-func (a *SMPPAdapter) BeginSend() {
-	a.activeSends.Add(1)
-}
-
-// EndSend отмечает завершение операции отправки SMS
-func (a *SMPPAdapter) EndSend() {
-	a.activeSends.Add(-1)
-}
-
-// GetActiveSendsCount возвращает количество активных операций отправки
-func (a *SMPPAdapter) GetActiveSendsCount() int32 {
-	return a.activeSends.Load()
-}
-
-// waitForActiveSends ждет завершения активных операций отправки
-// Аналогично waitForActiveOperations в DBConnection
-func (a *SMPPAdapter) waitForActiveSends() error {
-	const maxWaitTime = 10 * time.Second // Максимальное время ожидания
-	const checkInterval = 100 * time.Millisecond
-	const logInterval = 1 * time.Second
-
-	startTime := time.Now()
-	lastLogTime := time.Time{}
-	lastActiveCount := int32(-1)
-
-	for {
-		activeCount := a.activeSends.Load()
-		if activeCount == 0 {
-			return nil // Нет активных операций, можно переподключаться
-		}
-
-		// Проверяем, не превышен ли максимальный срок ожидания
-		if time.Since(startTime) > maxWaitTime {
-			if logger.Log != nil {
-				logger.Log.Warn("Превышено время ожидания завершения активных отправок",
-					zap.Int32("activeSends", activeCount))
-			}
-			// Продолжаем переподключение, но логируем предупреждение
-			return fmt.Errorf("таймаут ожидания активных отправок: %d активных операций", activeCount)
-		}
-
-		// Логируем только если прошло более 1 секунды с последнего логирования
-		now := time.Now()
-		if now.Sub(lastLogTime) >= logInterval || activeCount != lastActiveCount {
-			if logger.Log != nil {
-				logger.Log.Debug("Ожидание завершения активных отправок перед переподключением",
-					zap.Int32("activeSends", activeCount))
-			}
-			lastLogTime = now
-			lastActiveCount = activeCount
-		}
-
-		time.Sleep(checkInterval)
-	}
-}
-
-// WithClient выполняет функцию с безопасным доступом к SMPP клиенту
-// Гарантирует, что клиент не будет закрыт во время выполнения функции
-func (a *SMPPAdapter) WithClient(fn func(*smpp.Transceiver) error) error {
-	// Ждем завершения переподключения, если оно в процессе
-	for a.rebindInProgress.Load() {
-		if logger.Log != nil {
-			logger.Log.Debug("WithClient(): ожидание завершения переподключения")
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Увеличиваем счетчик активных операций ПОД блокировкой
 	a.mu.Lock()
-	a.activeSends.Add(1)
-	a.mu.Unlock()
-	defer func() {
-		a.mu.Lock()
-		a.activeSends.Add(-1)
-		a.mu.Unlock()
-	}()
-
-	// Получаем клиент под блокировкой
-	a.mu.RLock()
-	if a.client == nil {
-		a.mu.RUnlock()
-		return fmt.Errorf("клиент не инициализирован")
-	}
-
-	// Проверяем соединение
-	if !a.isConnected {
-		a.mu.RUnlock()
-		// Пытаемся переподключиться
-		if err := a.Bind(); err != nil {
-			return fmt.Errorf("ошибка подключения: %w", err)
-		}
-		// Повторно получаем клиент
-		a.mu.RLock()
-		if a.client == nil {
-			a.mu.RUnlock()
-			return fmt.Errorf("клиент не инициализирован после переподключения")
-		}
-	}
-
-	client := a.client
-	a.mu.RUnlock() // Блокировка снята, но счетчик activeSends > 0
-
-	// Выполняем функцию с клиентом
-	// Rebind() не может закрыть клиент, пока activeSends > 0
-	return fn(client)
+	defer a.mu.Unlock()
+	return a.isConnected && a.client != nil
 }
 
 // Rebind выполняет периодическое переподключение, если прошло более указанного времени
@@ -439,20 +328,7 @@ func (a *SMPPAdapter) Rebind(rebindIntervalMin uint) bool {
 			zap.Duration("rebindInterval", rebindInterval))
 	}
 
-	a.mu.Unlock()
-
-	// Ждем завершения активных операций отправки перед переподключением
-	if err := a.waitForActiveSends(); err != nil {
-		if logger.Log != nil {
-			logger.Log.Warn("Rebind(): не удалось дождаться завершения активных отправок",
-				zap.Error(err))
-		}
-		// Продолжаем переподключение, но логируем предупреждение
-	}
-
-	// Устанавливаем флаг переподключения
-	a.rebindInProgress.Store(true)
-	defer a.rebindInProgress.Store(false)
+	a.mu.Unlock() // Разблокируем перед вызовом Bind, чтобы избежать deadlock
 
 	// Выполняем переподключение (Bind сам заблокирует мьютекс)
 	err := a.Bind()
@@ -529,14 +405,20 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 	var smsID string
 	var err error
 
-	// Используем безопасный метод для работы с клиентом
-	err = a.WithClient(func(client *smpp.Transceiver) error {
-		// Блокировка удерживалась во время проверки соединения
-		// Счетчик activeSends > 0, поэтому Rebind() не может закрыть клиент
+	trySend := func() (string, error) {
+		// Проверяем соединение и подключаемся только если не подключены
+		if !a.IsConnected() {
+			if logger.Log != nil {
+				logger.Log.Debug("SendSMS(): соединение не установлено, выполняется подключение")
+			}
+			if err := a.Bind(); err != nil {
+				return "", fmt.Errorf("ошибка подключения: %w", err)
+			}
+		}
 
 		// Отправка SMS с автоматической сегментацией для длинных сообщений
 		// Используем SubmitLongMsg для автоматического разбиения длинных сообщений
-		parts, err := client.SubmitLongMsg(req)
+		parts, err := a.client.SubmitLongMsg(req)
 		if err != nil {
 			// Проверяем, является ли ошибка ошибкой соединения
 			if isConnectionError(err) {
@@ -547,12 +429,12 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 				a.mu.Lock()
 				a.isConnected = false
 				a.mu.Unlock()
-				return fmt.Errorf("ошибка соединения: %w", err)
+				return "", fmt.Errorf("ошибка соединения: %w", err)
 			}
-			return fmt.Errorf("ошибка отправки сообщения: %w", err)
+			return "", fmt.Errorf("ошибка отправки сообщения: %w", err)
 		}
 		if len(parts) == 0 {
-			return fmt.Errorf("не получен ответ от сервера")
+			return "", fmt.Errorf("не получен ответ от сервера")
 		}
 		// Возвращаем MessageID первой части (все части имеют одинаковый MessageID)
 		resp := &parts[0]
@@ -560,13 +442,14 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 		// Извлекаем MessageID из ответа
 		msgID := resp.RespID()
 		if msgID != "" {
-			smsID = msgID
-			return nil
+			return msgID, nil
 		}
 
-		return fmt.Errorf("не получен MessageID от сервера")
-	})
+		return "", fmt.Errorf("не получен MessageID от сервера")
+	}
 
+	// Первая попытка отправки
+	smsID, err = trySend()
 	if err != nil {
 		// Проверяем, является ли это ошибкой соединения
 		if isConnectionError(err) {
@@ -577,29 +460,7 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 			if bindErr := a.Bind(); bindErr != nil {
 				return "", fmt.Errorf("ошибка переподключения: %w", bindErr)
 			}
-			// Повторная попытка отправки
-			err = a.WithClient(func(client *smpp.Transceiver) error {
-				parts, err := client.SubmitLongMsg(req)
-				if err != nil {
-					if isConnectionError(err) {
-						a.mu.Lock()
-						a.isConnected = false
-						a.mu.Unlock()
-						return fmt.Errorf("ошибка соединения: %w", err)
-					}
-					return fmt.Errorf("ошибка отправки сообщения: %w", err)
-				}
-				if len(parts) == 0 {
-					return fmt.Errorf("не получен ответ от сервера")
-				}
-				resp := &parts[0]
-				msgID := resp.RespID()
-				if msgID != "" {
-					smsID = msgID
-					return nil
-				}
-				return fmt.Errorf("не получен MessageID от сервера")
-			})
+			smsID, err = trySend()
 			if err != nil {
 				return "", fmt.Errorf("ошибка отправки после переподключения: %w", err)
 			}
@@ -609,9 +470,7 @@ func (a *SMPPAdapter) SendSMS(number, text, senderName string) (string, error) {
 		}
 	}
 
-	a.mu.Lock()
 	a.lastAnswerTime = time.Now()
-	a.mu.Unlock()
 	return smsID, nil
 }
 
