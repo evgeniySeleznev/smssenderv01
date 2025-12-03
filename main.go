@@ -455,7 +455,7 @@ func runQueueProcessingLoop(
 
 		if err != nil && !gracefulShutdownInProgress {
 			// Обычная ошибка (не graceful shutdown) - переподключение
-			logger.Log.Error("Ошибка при выборке сообщений", zap.Error(err))
+			logger.Log.Warn("Ошибка при выборке сообщений", zap.Error(err))
 			logger.Log.Info("Ошибка соединения, переподключение...")
 			if !sleepWithContext(ctx, 5*time.Second) {
 				return
@@ -537,7 +537,7 @@ func runQueueProcessingLoop(
 						logger.Log.Info("Выборка сообщений из exception queue отменена из-за graceful shutdown")
 						return
 					}
-					logger.Log.Error("Ошибка при выборке сообщений из exception queue", zap.Error(err))
+					logger.Log.Warn("Ошибка при выборке сообщений из exception queue", zap.Error(err))
 					return
 				}
 				if len(exceptionMessages) > 0 {
