@@ -83,15 +83,8 @@ func InitLogger(cfg *ini.File) error {
 	fileEncoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
 	fileCore := zapcore.NewCore(fileEncoder, zapcore.AddSync(logWriter), getZapLevel(logLevel))
 
-	// Настраиваем zap core для вывода в консоль (с цветами для удобства)
-	consoleEncoder := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
-	consoleCore := zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), getZapLevel(logLevel))
-
-	// Объединяем оба core
-	core := zapcore.NewTee(fileCore, consoleCore)
-
-	// Создаем логгер
-	Log = zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+	// Создаем логгер только с fileCore (логирование только в файл)
+	Log = zap.New(fileCore, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	Log.Info("Логгер инициализирован",
 		zap.Int("logLevel", int(logLevel)),
